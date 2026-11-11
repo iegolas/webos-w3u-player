@@ -2400,4 +2400,87 @@ http://stream/main1`);
     await PlaylistService.unpinLiveGroup('Sports');
     expect(PlaylistService.pinnedRevision).toBeGreaterThan(pinnedTwice);
   });
+
+  it('lists a pinned group in every playlist tab', async () => {
+    await loadMain();
+
+    await pin('Sports', 'Sports');
+
+    expect(PlaylistService.getGroupsForPlaylist('a')).toEqual(['News', 'Sports']);
+    expect(PlaylistService.getGroupsForPlaylist()).toEqual(['News', 'Sports']);
+    expect(PlaylistService.getGroupsForPlaylist('a').filter(name => name === 'Sports'))
+      .toHaveLength(1);
+  });
+
+  it('resolves a pinned group from any playlist tab', async () => {
+    await loadMain();
+    await pin('Sports', 'Sports');
+
+    expect(PlaylistService.getByGroup('source:Sports', 'a').map(item => item.name))
+      .toEqual(['A1', 'A2']);
+    expect(PlaylistService.getGroupCount('source:Sports', 'a')).toBe(2);
+    expect(PlaylistService.getByGroup('source:Sports').map(item => item.name))
+      .toEqual(['A1', 'A2']);
+    expect(PlaylistService.getGroupCount('source:Sports')).toBe(2);
+  });
+
+  it('keeps other groups scoped to their playlist', async () => {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'a', name: 'P1', url: MAIN_URL },
+      { id: 'b', name: 'P2', url: OTHER_URL },
+    ]);
+    fetchTextMock.mockImplementation((url: string) => Promise.resolve(
+      url === MAIN_URL ? MAIN : url === OTHER_URL ? OTHER : LINKED,
+    ));
+    await PlaylistService.refresh();
+
+    await pin('Sports', 'Sports');
+
+    expect(PlaylistService.getGroupsForPlaylist('a')).toEqual(['News', 'Sports']);
+    expect(PlaylistService.getGroupsForPlaylist('b')).toEqual(['Other', 'Sports']);
+    expect(PlaylistService.getByGroup('source:Other', 'b').map(item => item.name))
+      .toEqual(['O1']);
+    expect(PlaylistService.getByGroup('source:Other', 'a')).toEqual([]);
+    expect(PlaylistService.getGroupCount('source:Other', 'a')).toBe(0);
+    expect(PlaylistService.getByGroup('source:Sports', 'b').map(item => item.name))
+      .toEqual(['A1', 'A2']);
+  });
+
+  it('drops an unpinned group from every playlist tab', async () => {
+    await loadMain();
+    await pin('Sports', 'Sports');
+    const revision = PlaylistService.groupsRevision;
+
+    await PlaylistService.unpinLiveGroup('Sports');
+
+    expect(PlaylistService.groupsRevision).toBeGreaterThan(revision);
+    expect(PlaylistService.getGroupsForPlaylist('a')).toEqual(['News']);
+    expect(PlaylistService.getGroupsForPlaylist()).toEqual(['News']);
+    expect(PlaylistService.getByGroup('source:Sports', 'a')).toEqual([]);
+    expect(PlaylistService.getGroupCount('source:Sports', 'a')).toBe(0);
+  });
+
+  it('resolves a collision-suffixed pinned group the same way', async () => {
+    await loadMain(`#EXTM3U
+#EXTINF:-1 group-title="Sports",Alpha
+http://stream/main1`);
+    await pin('Sports', 'Sports');
+
+    expect(PlaylistService.getGroupsForPlaylist('a')).toEqual(['Sports', 'Sports 2']);
+    expect(PlaylistService.getByGroup('source:Sports 2', 'a').map(item => item.name))
+      .toEqual(['A1', 'A2']);
+    expect(PlaylistService.getGroupCount('source:Sports 2', 'a')).toBe(2);
+    expect(PlaylistService.getByGroup('source:Sports', 'a').map(item => item.name))
+      .toEqual(['Alpha']);
+  });
+
+  it('treats a pinned group as belonging to no playlist', async () => {
+    await loadMain();
+    await pin('', 'List');
+
+    expect(PlaylistService.getGroupsForPlaylist('a')).toEqual(['News', 'Sports', 'Movies']);
+    expect(PlaylistService.getPlaylistIdsForGroup('source:Sports')).toEqual([]);
+    expect(PlaylistService.getPlaylistIdsForGroup('source:Movies')).toEqual([]);
+    expect(PlaylistService.getPlaylistIdsForGroup('source:News')).toEqual(['a']);
+  });
 });

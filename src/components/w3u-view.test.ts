@@ -1122,17 +1122,70 @@ describe('W3uView show in Live', () => {
     expect(rows()[1].querySelector('.w3u-group-label')?.textContent).toBe('Hub One');
   });
 
-  it('keeps the pin on the second line under the name, keyed for the D-pad', () => {
+  it('puts the pin before the name on one line, keyed for the D-pad', () => {
     open(root(), links());
     expect(chipOf(1)?.getAttribute('data-key')).toBe('p:1');
     expect(chipOf(2)?.getAttribute('data-key')).toBe('p:2');
-    expect(chipOf(1)?.parentElement?.querySelector('.w3u-group-label')?.textContent).toBe('Hub One');
+    for (const row of [1, 2]) {
+      const lead = chipOf(row)?.parentElement as HTMLElement;
+      expect(lead.classList.contains('w3u-group-lead')).toBe(true);
+      expect(Array.from(lead.children).map((el) => el.className.split(' ')[0])).toEqual(['w3u-pin', 'w3u-group-label']);
+      expect(lead.parentElement).toBe(rows()[row]);
+    }
+    expect(chipOf(1)?.nextElementSibling?.textContent).toBe('Hub One');
+  });
+
+  it('leaves rows without a pin as they were, with no leading box', () => {
+    open(root(), links(), [ONE]);
+    expect(rows()[0].querySelector('.w3u-group-lead')).toBeNull();
+    expect(rows()[1].querySelector('.w3u-group-lead')).toBeNull();
+    expect(rows()[0].querySelector('.w3u-group-label')?.parentElement).toBe(rows()[0]);
+  });
+
+  it('shows the pin and name on one centered line and ellipsizes only the name', () => {
+    const css = readFileSync(resolve(__dirname, '../../css/w3u-view.css'), 'utf8');
+    const rule = (selector: string): string => {
+      const match = css.match(new RegExp(`(?:^|\\n)${selector.replace(/[.]/g, '\\.')} \\{([^}]*)\\}`));
+      return match ? match[1] : '';
+    };
+    expect(rule('.w3u-group-lead')).toMatch(/display: flex;[^}]*align-items: center;/);
+    expect(rule('.w3u-group-lead')).not.toMatch(/flex-direction/);
+    expect(rule('.w3u-group-lead .w3u-pin')).toMatch(/flex: 0 0 auto;[^}]*margin-right: 12px;/);
+    expect(rule('.w3u-group-text .w3u-group-label')).toMatch(/white-space: nowrap;/);
+    expect(rule('.w3u-group-text .w3u-group-label')).toMatch(/text-overflow: ellipsis;/);
+    expect(rule('.w3u-group-label')).toMatch(/min-width: 0;/);
+    expect(rule('.w3u-pin')).not.toMatch(/overflow|ellipsis|margin-top/);
+    // Chromium 53 has no flex `gap`.
+    expect(css).not.toMatch(/\bgap:/);
+  });
+
+  it('keeps the count and chevron after the name on pinnable rows', async () => {
+    fetchMock.mockResolvedValueOnce(parsedList(films(), [nested('Sub Two', SUB)]));
+    const view = open(root(), links());
+    goToRow(view, 1);
+    pressKey(view, 'select');
+    await settle();
+    const films0 = rows()[0];
+    expect(Array.from(films0.children).map((el) => el.className.split(' ')[0])).toEqual(['w3u-group-text', 'w3u-group-count']);
+    const sub = rows()[2];
+    expect(sub.lastElementChild?.classList.contains('w3u-group-more')).toBe(true);
+    expect(sub.querySelector('.w3u-group-lead')?.firstElementChild).toBe(chipOf(2));
+  });
+
+  it('keeps one ring through row, pin, and back', () => {
+    const view = open(root(), links());
+    goToRow(view, 1);
+    expect(focusedKeys()).toEqual(['g:1']);
+    pressKey(view, 'right');
+    expect(focusedKeys()).toEqual(['p:1']);
+    pressKey(view, 'left');
+    expect(focusedKeys()).toEqual(['g:1']);
   });
 
   it('keeps the same fixed box in every state and never reveals words on focus', () => {
     const css = readFileSync(resolve(__dirname, '../../css/w3u-view.css'), 'utf8');
     const rule = (selector: string): string => {
-      const match = css.match(new RegExp(`${selector.replace(/[.]/g, '\\.')} \\{([^}]*)\\}`));
+      const match = css.match(new RegExp(`(?:^|\\n)${selector.replace(/[.]/g, '\\.')} \\{([^}]*)\\}`));
       return match ? match[1] : '';
     };
     expect(rule('.w3u-pin')).toMatch(/width: 32px;/);

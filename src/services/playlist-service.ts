@@ -188,6 +188,8 @@ function pinSelectionKey(url: string, group: string): string {
 
 // A synthetic tab id so overlay channels never look like they belong to a
 // configured playlist.
+const LINK_PLAYLIST_PREFIX = 'link:';
+
 function linkPlaylistId(url: string): string {
   let hash = 2166136261;
   const key = canonicalUrl(url);
@@ -195,7 +197,7 @@ function linkPlaylistId(url: string): string {
     hash ^= key.charCodeAt(i);
     hash = Math.imul(hash, 16777619);
   }
-  return `link:${(hash >>> 0).toString(36)}`;
+  return `${LINK_PLAYLIST_PREFIX}${(hash >>> 0).toString(36)}`;
 }
 
 function nextFreeGroupName(name: string, used: Set<string>): string {
@@ -244,6 +246,8 @@ class PlaylistServiceImpl {
   private readonly pinnedLinks = new Map<string, PinnedLinkEntry>();
   private pinnedOverlay: Channel[] = [];
   private pinnedLiveGroupMap: PinnedLiveGroup[] = [];
+  // Rendered overlay group names; they stand outside every playlist tab.
+  private pinnedGroupNames = new Set<string>();
   private readonly pinnedListCache = new Map<string, Map<string, Channel[]>>();
   private readonly pinFetchTokens = new Map<string, number>();
   private pinFetchSeq = 0;
@@ -959,6 +963,7 @@ class PlaylistServiceImpl {
     const changed = this.pinnedStateChanged(mapped, overlay);
     this.pinnedOverlay = overlay;
     this.pinnedLiveGroupMap = mapped;
+    this.pinnedGroupNames = new Set(mapped.map(entry => entry.group));
     if (changed) this.pinnedRevision++;
     return overlay.length ? base.concat(overlay) : base;
   }
@@ -1401,6 +1406,7 @@ class PlaylistServiceImpl {
     this.pinnedLinks.clear();
     this.pinnedOverlay = [];
     this.pinnedLiveGroupMap = [];
+    this.pinnedGroupNames.clear();
     this.pinnedListCache.clear();
     this.pinFetchTokens.clear();
     this.pinnedNotices = [];
@@ -1420,9 +1426,11 @@ class PlaylistServiceImpl {
       return favorites;
     }
     const sourceGroup = group.slice('source:'.length);
-    return playlist
-      ? this.channelsByPlaylistGroup.get(playlist)?.get(sourceGroup) ?? []
-      : this.channelsByGroup.get(sourceGroup) ?? [];
+    // A pinned group is not owned by a tab, so it resolves the same in every one.
+    if (playlist && !this.pinnedGroupNames.has(sourceGroup)) {
+      return this.channelsByPlaylistGroup.get(playlist)?.get(sourceGroup) ?? [];
+    }
+    return this.channelsByGroup.get(sourceGroup) ?? [];
   }
 
   getGroupCount(group: ChannelGroupId, playlist?: string): number {
@@ -1432,9 +1440,10 @@ class PlaylistServiceImpl {
     }
     if (group === 'builtin:favorites') return this.getByGroup(group, playlist).length;
     const sourceGroup = group.slice('source:'.length);
-    return playlist
-      ? this.channelsByPlaylistGroup.get(playlist)?.get(sourceGroup)?.length ?? 0
-      : this.channelsByGroup.get(sourceGroup)?.length ?? 0;
+    if (playlist && !this.pinnedGroupNames.has(sourceGroup)) {
+      return this.channelsByPlaylistGroup.get(playlist)?.get(sourceGroup)?.length ?? 0;
+    }
+    return this.channelsByGroup.get(sourceGroup)?.length ?? 0;
   }
 
   searchLocalRanked(
@@ -1450,19 +1459,30 @@ class PlaylistServiceImpl {
     return rankPreparedTopK(index, query, limit);
   }
 
+  // A pinned overlay belongs to no configured playlist, so its synthetic tab
+  // id is not a lock target.
   getPlaylistIdsForGroup(group: ChannelGroupId): string[] {
     this.ensureDerivedIndexes();
     const sourceGroup = group.slice('source:'.length);
     const ids: string[] = [];
     this.channelsByPlaylistGroup.forEach((groups, playlistId) => {
-      if (groups.has(sourceGroup)) ids.push(playlistId);
+      if (groups.has(sourceGroup) && playlistId.indexOf(LINK_PLAYLIST_PREFIX) !== 0) {
+        ids.push(playlistId);
+      }
     });
     return ids;
   }
 
   getGroupsForPlaylist(playlist?: string): string[] {
     this.ensureDerivedIndexes();
-    return (playlist ? this.groupsByPlaylist.get(playlist) ?? [] : this.groups).slice();
+    if (!playlist) return this.groups.slice();
+    const base = this.groupsByPlaylist.get(playlist) ?? [];
+    if (!this.pinnedGroupNames.size) return base.slice();
+    const scoped = new Set(base);
+    // Pinned groups follow this playlist's groups, in the live list's order.
+    const pinned = this.groups.filter(name =>
+      this.pinnedGroupNames.has(name) && !scoped.has(name));
+    return pinned.length ? base.concat(pinned) : base.slice();
   }
 
   getGroupKeyForDisplay(display: string): string {

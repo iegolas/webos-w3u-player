@@ -133,6 +133,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* A pinnable row: the pin, then the name, on one line. The pin keeps its size
+   and the name takes what is left and ellipsizes. */
+.w3u-group-lead {
+  display: flex;
+  align-items: center;
+}
+.w3u-group-lead .w3u-pin { flex: 0 0 auto; margin-right: 12px; }
 .w3u-link-tag {
   display: block;
   margin-top: 2px;
@@ -141,7 +148,7 @@
 }
 .w3u-group-blocked .w3u-link-art { opacity: 0.6; }
 
-/* "Show in Live" on a row: a pin under the name. Outline and quiet at rest,
+/* "Show in Live" on a row: a pin before the name. Outline and quiet at rest,
    filled in the accent once the row is in Live; while it has focus it takes
    the accent fill behind the same glyph. It has its own ring (the shared
    one); the row's ring stays off while it is focused. The box is a fixed
@@ -155,9 +162,7 @@
   box-sizing: border-box;
   width: 32px;
   height: 32px;
-  margin-top: 2px;
   padding: 0;
-  vertical-align: top;
   border: 2px solid transparent;
   border-radius: 999px;
   color: var(--text-secondary);

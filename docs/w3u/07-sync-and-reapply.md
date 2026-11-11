@@ -55,10 +55,10 @@ Conflict policy that has worked here:
 Our commits are already feature-shaped:
 
 ```bash
-git cherry-pick ce6c63a   # W3U parser + Library + embeds + identity
-git cherry-pick df3a1a2   # station kinds + labels
-git cherry-pick e3b7475   # linked lists + detached playback
-git cherry-pick d6104bb   # pins, Live overlay, prefixes, Guide, empty stream
+git cherry-pick d580deb   # W3U parser + Library + embeds + identity
+git cherry-pick 0eb700d   # station kinds + labels
+git cherry-pick 1ff0bad   # linked lists + detached playback
+git cherry-pick a24fe0d   # pins, Live overlay, prefixes, Guide, empty stream
 ```
 
 If a commit is too large for the new base, split by the seams:

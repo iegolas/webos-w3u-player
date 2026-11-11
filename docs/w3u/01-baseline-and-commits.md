@@ -17,16 +17,16 @@ adding a fork remote; nothing has been pushed.
 
 | # | SHA | Subject | Size | Feature area |
 | --- | --- | --- | --- | --- |
-| 1 | `ce6c63a` | Add W3U playlist support and ok.ru embed playback | 54 files, +3492/−68 | W3U parser, Library view, embed resolve/hand-off, app identity, packaging, first entry-focus fix |
-| 2 | `df3a1a2` | Label W3U embed playback and release 1.17.1 | 19 files, +287/−50 | direct/resolvable/browser station kinds, busy state, 1.17.1 |
-| 3 | `e3b7475` | Follow linked W3U playlists and play their titles | 29 files, +2289/−92 | group links in parser/cache/service, Library link levels, depth/caps/cycles, detached playback, 1.17.2 |
-| 4 | `d6104bb` | Add Live pins, Guide toggle and empty-stream errors | 45 files, +3135/−64 | pins (Library + Live), Live overlay, All-list prefixes, empty-manifest state, Guide toggle, 1.17.3→1.17.5 |
+| 1 | `d580deb` | Add W3U playlist support and ok.ru embed playback | 54 files, +3492/−68 | W3U parser, Library view, embed resolve/hand-off, app identity, packaging, first entry-focus fix |
+| 2 | `0eb700d` | Label W3U embed playback and release 1.17.1 | 19 files, +287/−50 | direct/resolvable/browser station kinds, busy state, 1.17.1 |
+| 3 | `1ff0bad` | Follow linked W3U playlists and play their titles | 29 files, +2289/−92 | group links in parser/cache/service, Library link levels, depth/caps/cycles, detached playback, 1.17.2 |
+| 4 | `a24fe0d` | Add Live pins, Guide toggle and empty-stream errors | 45 files, +3135/−64 | pins (Library + Live), Live overlay, All-list prefixes, empty-manifest state, Guide toggle, 1.17.3→1.17.5 |
 
 Notes on numbering: the version bumps for 1.17.3, 1.17.4 and 1.17.5 all
 landed inside commit 4, because the intermediate bumps were deliberately
 left uncommitted while the features were still being tested.
 
-## Commit 1 — W3U arrives (ce6c63a)
+## Commit 1 — W3U arrives (d580deb)
 
 - `src/parsers/w3u-parser.ts` + test: tolerant JSON, station mapping,
   group links (recorded later in commit 3), header extraction.
@@ -46,14 +46,14 @@ left uncommitted while the features were still being tested.
   `homebrew-repository.json` deleted (it advertised upstream's id).
 - Docs: `PLAN.md`, `docs/DEVICE.md`.
 
-## Commit 2 — station kinds and labels (df3a1a2)
+## Commit 2 — station kinds and labels (0eb700d)
 
 - `classifyStation` → `direct` / `resolvable` / `browser`; only
   browser-only embeds keep the “Browser” pill and the explanatory note.
 - Busy state while a resolvable embed starts; Back cancels it.
 - `w3u.starting` and related copy in 11 locales; 1.17.1.
 
-## Commit 3 — linked lists (e3b7475)
+## Commit 3 — linked lists (1ff0bad)
 
 - `W3uGroupLink` / `PlaylistGroupLink` in `src/types.ts`.
 - Parser records link groups instead of warning them away.
@@ -68,7 +68,7 @@ left uncommitted while the features were still being tested.
   entries, continuation backslashes.
 - 1.17.2.
 
-## Commit 4 — pins, Live overlay, prefixes, Guide (d6104bb)
+## Commit 4 — pins, Live overlay, prefixes, Guide (a24fe0d)
 
 - Pins: `PinnedSelection` + storage key `iptv_pinned_linked_groups`
   (canonical URLs, max 50); `PlaylistService.setGroupPinned`,

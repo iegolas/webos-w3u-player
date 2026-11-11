@@ -949,7 +949,7 @@ export class W3uView {
         <div class="w3u-group w3u-group-link${active ? ' active' : ''}" data-focusable data-key="g:${index}"
              style="top:${index * GROUP_ROW_STRIDE}px">
           ${art}
-          ${request ? html`<span class="w3u-group-text"><span class="w3u-group-label">${label}</span>${chip}</span>`
+          ${request ? html`<span class="w3u-group-text w3u-group-lead">${chip}<span class="w3u-group-label">${label}</span></span>`
             : html`<span class="w3u-group-label">${label}</span>`}
           <span class="w3u-group-more w3u-glyph">${raw(CHEVRON_RIGHT_ICON)}</span>
         </div>
@@ -959,7 +959,7 @@ export class W3uView {
     return html`
       <div class="w3u-group${active ? ' active' : ''}" data-focusable data-key="g:${index}"
            style="top:${index * GROUP_ROW_STRIDE}px">
-        ${request ? html`<span class="w3u-group-text"><span class="w3u-group-label">${name}</span>${chip}</span>`
+        ${request ? html`<span class="w3u-group-text w3u-group-lead">${chip}<span class="w3u-group-label">${name}</span></span>`
           : html`<span class="w3u-group-label">${name}</span>`}
         <span class="w3u-group-count">${group.stations.length}</span>
       </div>
