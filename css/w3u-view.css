@@ -318,21 +318,6 @@
   overflow: hidden;
   white-space: pre-line;
 }
-.w3u-note {
-  display: flex;
-  align-items: flex-start;
-  max-width: 1000px;
-  margin-top: 8px;
-  font-size: 24px;
-  line-height: 1.4;
-  color: var(--text-secondary);
-}
-.w3u-note .w3u-glyph {
-  width: 28px;
-  height: 28px;
-  margin: 2px 12px 0 0;
-  color: var(--text-muted);
-}
 .w3u-detail .detail-btn-icon.w3u-glyph { width: 28px; height: 28px; }
 
 /* Play on a title that still has to be looked up: the icon becomes a spinner

@@ -55,10 +55,13 @@ interface ParsedKey {
 }
 
 const DETAIL_KEY = 'd:action';
+// The second action of every title, beside Play.
+const DETAIL_BROWSER_KEY = 'd:browser';
 
 function parseKey(key: string | null): ParsedKey | null {
   if (key === null) return null;
   if (key === DETAIL_KEY) return { region: 'detail', index: 0 };
+  if (key === DETAIL_BROWSER_KEY) return { region: 'detail', index: 1 };
   const match = /^([gpt]):(\d+)$/.exec(key);
   if (!match) return null;
   return { region: match[1] === 'g' ? 'group' : match[1] === 'p' ? 'pin' : 'tile', index: Number(match[2]) };
@@ -109,10 +112,11 @@ function newLevel(label: string, url: string | null, groups: W3uGroup[], cut: W3
 }
 
 // The W3U Library: a group list beside a poster grid of that group's titles,
-// and a detail screen with a Play / Open in TV browser action. Play on a
-// resolvable embed shows "Starting…" on the button until the host settles. One focus scope
+// and a detail screen with Play and Open in TV browser actions on every title.
+// Play on a resolvable embed shows "Starting…" on the button until the host
+// settles; Open in TV browser never resolves. One focus scope
 // holds the focused group row, poster, or button; keys are plain indexes
-// (`g:2`, `t:15`, `d:action`) because only the active group's grid exists.
+// (`g:2`, `t:15`, `d:action`, `d:browser`) because only the active group's grid exists.
 // A group row can link to another playlist: choosing it fetches that list
 // then (never before) and shows its titles in the same grid. A list that
 // has several groups or links of its own becomes one more level, whose rail
@@ -704,7 +708,10 @@ export class W3uView {
   private detailAction(action: Action): void {
     if (action === 'back') this.closeDetail();
     else if (action === 'up') this.handlers.onRevealTabBar();
-    else if (action === 'select') this.activate();
+    else if (action === 'select') this.activate(this.focusScope.focusKey);
+    else if (action === 'left' || action === 'right') {
+      this.request(action === 'right' ? DETAIL_BROWSER_KEY : DETAIL_KEY, 'key');
+    }
   }
 
   // --- detail ---
@@ -728,10 +735,11 @@ export class W3uView {
     this.request(`t:${this.detailReturn}`, this.placementVia());
   }
 
-  private activate(): void {
+  // Both actions wait while a Play is starting, so only one attempt runs.
+  private activate(key: string | null): void {
     const station = this.detail;
     if (!station || this.starting) return;
-    if (station.kind === 'browser') {
+    if (key === DETAIL_BROWSER_KEY) {
       this.handlers.onOpenInBrowser(station);
       return;
     }
@@ -973,7 +981,6 @@ export class W3uView {
   private renderDetail(): void {
     const station = this.detail;
     if (!station) return;
-    const embed = station.kind === 'browser';
     const busy = this.starting === station;
     morph(this.layers.detail, html`
       <div class="catalog-view movies-detail w3u-detail" data-nav-container>
@@ -982,14 +989,15 @@ export class W3uView {
           <h1 class="detail-title">${station.name}</h1>
           ${station.genres.length ? html`<div class="detail-meta">${station.genres.join('  ·  ')}</div>` : ''}
           ${station.synopsis ? html`<p class="detail-plot w3u-synopsis">${station.synopsis}</p>` : ''}
-          ${embed ? html`
-            <div class="w3u-note"><span class="w3u-glyph">${raw(GLOBE_ICON)}</span><span>${t('w3u.browserNote')}</span></div>
-          ` : ''}
           <div class="detail-actions">
             <button class="detail-btn detail-btn-primary${busy ? ' w3u-busy' : ''}" type="button"
                     data-focusable data-key="${DETAIL_KEY}" aria-busy="${busy ? 'true' : 'false'}">
-              <span class="detail-btn-icon${embed ? ' w3u-glyph' : ''}">${busy ? '' : raw(embed ? GLOBE_ICON : PLAY_ICON)}</span>
-              <span>${t(busy ? 'w3u.starting' : embed ? 'w3u.openInBrowser' : 'catalog.play')}</span>
+              <span class="detail-btn-icon">${busy ? '' : raw(PLAY_ICON)}</span>
+              <span>${t(busy ? 'w3u.starting' : 'catalog.play')}</span>
+            </button>
+            <button class="detail-btn" type="button" data-focusable data-key="${DETAIL_BROWSER_KEY}">
+              <span class="detail-btn-icon w3u-glyph">${raw(GLOBE_ICON)}</span>
+              <span>${t('w3u.openInBrowser')}</span>
             </button>
           </div>
         </div>

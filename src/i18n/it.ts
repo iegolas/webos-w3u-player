@@ -551,7 +551,6 @@ export const IT_MESSAGES = {
   },
   'w3u.browserBadge': 'Browser',
   'w3u.openInBrowser': 'Apri nel browser della TV',
-  'w3u.browserNote': 'Questo titolo viene riprodotto sul suo sito web. Aprilo nel browser della TV per guardarlo.',
   'w3u.starting': 'Avvio…',
   'w3u.browserUnavailable': "Impossibile aprire il browser del televisore.",
   'w3u.linkIdle': "Seleziona questa playlist per vedere i suoi titoli.",

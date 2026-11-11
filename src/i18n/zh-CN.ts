@@ -537,7 +537,6 @@ export const ZH_CN_MESSAGES = {
   },
   'w3u.browserBadge': '浏览器',
   'w3u.openInBrowser': '在电视浏览器中打开',
-  'w3u.browserNote': '此内容需在其所在网页播放。请在电视浏览器中打开观看。',
   'w3u.starting': '正在启动…',
   'w3u.browserUnavailable': "无法打开电视浏览器。",
   'w3u.linkIdle': "选择此播放列表以查看其中的内容。",

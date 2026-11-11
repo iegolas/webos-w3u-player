@@ -553,7 +553,6 @@ export const PT_BR_MESSAGES = {
   },
   'w3u.browserBadge': 'Navegador',
   'w3u.openInBrowser': 'Abrir no navegador da TV',
-  'w3u.browserNote': 'Este título é reproduzido no próprio site. Abra-o no navegador da TV para assistir.',
   'w3u.starting': 'Iniciando…',
   'w3u.browserUnavailable': "Não foi possível abrir o navegador da TV.",
   'w3u.linkIdle': "Selecione esta lista para ver os títulos dela.",

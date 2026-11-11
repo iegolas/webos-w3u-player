@@ -177,49 +177,149 @@ describe('W3uView detail', () => {
     sourceAttributes: { 'w3u-info': info },
   });
 
-  it('opens a title with its genres and synopsis and a Play action', () => {
+  const kinds: Array<[string, string, () => Channel]> = [
+    ['direct', 'direct', () => withInfo],
+    ['resolvable', 'resolvable', () => resolvableStation('Delta', 'Group A')],
+    ['browser-only', 'browser', () => embedStation('Charlie', 'Group A')],
+  ];
+  const buttons = (): HTMLElement[] =>
+    Array.from(container.querySelectorAll<HTMLElement>('.w3u-layer-detail .detail-btn'));
+
+  it('opens a title with its genres and synopsis', () => {
     const view = open([withInfo]);
     pressKey(view, 'select');
     const detail = container.querySelector('.w3u-layer-detail')!;
     expect(detail.querySelector('.detail-title')?.textContent).toBe('Alpha');
     expect(detail.querySelector('.detail-meta')?.textContent).toContain('Drama');
     expect(detail.querySelector('.detail-plot')?.textContent).toBe('A short story.');
-    expect(detail.querySelector('.detail-btn')?.textContent).toContain('Play');
-    expect(detail.querySelector('.w3u-note')).toBeNull();
-    expect(focusedKeys()).toEqual(['d:action']);
   });
 
-  it('plays a direct title', () => {
-    const view = open([withInfo]);
-    pressKey(view, 'select');
-    pressKey(view, 'select');
-    expect(handlers.onPlay).toHaveBeenCalledWith(withInfo);
-    expect(handlers.onOpenInBrowser).not.toHaveBeenCalled();
+  describe.each(kinds)('a %s title', (_label, kind, make) => {
+    const channel = make();
+
+    function openDetail(): W3uView {
+      const view = open([channel]);
+      pressKey(view, 'select');
+      return view;
+    }
+
+    it('offers Play first and Open in TV browser second, without a note', () => {
+      openDetail();
+      expect(buttons().map((el) => el.textContent?.trim())).toEqual(['Play', 'Open in TV browser']);
+      expect(buttons().map((el) => el.getAttribute('data-key'))).toEqual(['d:action', 'd:browser']);
+      expect(buttons()[0].classList.contains('detail-btn-primary')).toBe(true);
+      expect(buttons()[1].classList.contains('detail-btn-primary')).toBe(false);
+      expect(buttons()[0].querySelector('svg')).not.toBeNull();
+      expect(buttons()[1].querySelector('svg')).not.toBeNull();
+      expect(container.querySelector('.w3u-layer-detail .w3u-note')).toBeNull();
+      expect(focusedKeys()).toEqual(['d:action']);
+    });
+
+    it('plays on OK from the first action, without opening the browser', () => {
+      const view = openDetail();
+      pressKey(view, 'select');
+      expect(handlers.onPlay).toHaveBeenCalledTimes(1);
+      expect(handlers.onPlay).toHaveBeenCalledWith(channel);
+      expect(handlers.onOpenInBrowser).not.toHaveBeenCalled();
+    });
+
+    it('opens the TV browser on OK from the second action, without playing or a spinner', () => {
+      const view = openDetail();
+      pressKey(view, 'right');
+      expect(focusedKeys()).toEqual(['d:browser']);
+      pressKey(view, 'select');
+      expect(handlers.onOpenInBrowser).toHaveBeenCalledTimes(1);
+      expect(handlers.onOpenInBrowser.mock.calls[0][0]).toMatchObject({ name: channel.name, kind });
+      expect(handlers.onPlay).not.toHaveBeenCalled();
+      expect(container.querySelector('.w3u-busy')).toBeNull();
+      expect(buttons()[1].hasAttribute('aria-busy')).toBe(false);
+      expect(buttons()[0].getAttribute('aria-busy')).toBe('false');
+    });
+
+    it('moves between the two actions with one ring, and stops at the ends', () => {
+      const view = openDetail();
+      pressKey(view, 'left');
+      expect(focusedKeys()).toEqual(['d:action']);
+      pressKey(view, 'right');
+      expect(focusedKeys()).toEqual(['d:browser']);
+      pressKey(view, 'right');
+      expect(focusedKeys()).toEqual(['d:browser']);
+      pressKey(view, 'left');
+      expect(focusedKeys()).toEqual(['d:action']);
+      expect(container.querySelectorAll('.focused')).toHaveLength(1);
+    });
+
+    it('hands Up to the tab bar and Back to the grid from the second action', () => {
+      const view = openDetail();
+      pressKey(view, 'right');
+      pressKey(view, 'up');
+      expect(handlers.onRevealTabBar).toHaveBeenCalledTimes(1);
+      pressKey(view, 'back');
+      expect(focusedKeys()).toEqual(['t:0']);
+      expect(handlers.onCancelPlay).not.toHaveBeenCalled();
+    });
+
+    it('starts at Play again when a title is opened after leaving the browser action', () => {
+      const view = openDetail();
+      pressKey(view, 'right');
+      pressKey(view, 'back');
+      pressKey(view, 'select');
+      expect(focusedKeys()).toEqual(['d:action']);
+    });
   });
 
-  it('explains an embed-only title and offers the TV browser instead of Play', () => {
+  it.each([kinds[0], kinds[2]])('never shows Starting on a %s title, even if the host returns a promise', (_l, _k, make) => {
+    handlers.onPlay.mockReturnValue(Promise.resolve());
+    const view = open([make()]);
+    pressKey(view, 'select');
+    pressKey(view, 'select');
+    expect(buttons()[0].textContent?.trim()).toBe('Play');
+    expect(container.querySelector('.w3u-busy')).toBeNull();
+  });
+
+  describe('a resolvable title', () => {
+    const resolvable = resolvableStation('Delta', 'Group A');
+
+    function openDetail(): W3uView {
+      const view = open([resolvable]);
+      pressKey(view, 'select');
+      return view;
+    }
+
+    it('keeps the ring on the browser action while Play re-renders', async () => {
+      let finish!: () => void;
+      handlers.onPlay.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+      const view = openDetail();
+      pressKey(view, 'select');
+      pressKey(view, 'right');
+      expect(buttons()[0].textContent).toContain('Starting');
+      expect(buttons()[1].textContent).toContain('Open in TV browser');
+      expect(focusedKeys()).toEqual(['d:browser']);
+      finish();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(focusedKeys()).toEqual(['d:browser']);
+    });
+
+    it('ignores the browser action while Play is starting, so nothing double-fires', () => {
+      handlers.onPlay.mockImplementation(() => new Promise<void>(() => undefined));
+      const view = openDetail();
+      pressKey(view, 'select');
+      pressKey(view, 'right');
+      pressKey(view, 'select');
+      pressKey(view, 'left');
+      pressKey(view, 'select');
+      expect(handlers.onOpenInBrowser).not.toHaveBeenCalled();
+      expect(handlers.onPlay).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('keeps direct playback calls unchanged for a browser-only title', () => {
     const embed = embedStation('Charlie', 'Group A');
     const view = open([embed]);
     pressKey(view, 'select');
-    const detail = container.querySelector('.w3u-layer-detail')!;
-    expect(detail.querySelector('.w3u-note')?.textContent).toContain('TV browser');
-    expect(detail.querySelector('.detail-btn')?.textContent).toContain('Open in TV browser');
     pressKey(view, 'select');
-    expect(handlers.onOpenInBrowser).toHaveBeenCalledTimes(1);
-    expect(handlers.onOpenInBrowser.mock.calls[0][0]).toMatchObject({ name: 'Charlie', kind: 'browser' });
-    expect(handlers.onPlay).not.toHaveBeenCalled();
-  });
-
-  it('plays a resolvable title with the same Play action and no browser note', () => {
-    const resolvable = resolvableStation('Delta', 'Group A');
-    const view = open([resolvable]);
-    pressKey(view, 'select');
-    const detail = container.querySelector('.w3u-layer-detail')!;
-    expect(detail.querySelector('.detail-btn')?.textContent).toContain('Play');
-    expect(detail.querySelector('.detail-btn')?.textContent).not.toContain('browser');
-    expect(detail.querySelector('.w3u-note')).toBeNull();
-    pressKey(view, 'select');
-    expect(handlers.onPlay).toHaveBeenCalledWith(resolvable);
+    expect(handlers.onPlay).toHaveBeenCalledWith(embed);
     expect(handlers.onOpenInBrowser).not.toHaveBeenCalled();
   });
 
@@ -234,7 +334,7 @@ describe('W3uView detail', () => {
       return view;
     }
 
-    const button = (): HTMLElement => container.querySelector<HTMLElement>('.w3u-layer-detail .detail-btn')!;
+    const button = (): HTMLElement => container.querySelector<HTMLElement>('.w3u-layer-detail [data-key="d:action"]')!;
 
     it('keeps the title and ring and shows Starting on the action', () => {
       startResolving();

@@ -553,7 +553,6 @@ export const FR_MESSAGES = {
   },
   'w3u.browserBadge': 'Navigateur',
   'w3u.openInBrowser': 'Ouvrir dans le navigateur TV',
-  'w3u.browserNote': 'Ce titre est lu sur son propre site web. Ouvrez-le dans le navigateur TV pour le regarder.',
   'w3u.starting': 'Démarrage…',
   'w3u.browserUnavailable': "Impossible d'ouvrir le navigateur du téléviseur.",
   'w3u.linkIdle': "Sélectionnez cette liste pour voir ses titres.",

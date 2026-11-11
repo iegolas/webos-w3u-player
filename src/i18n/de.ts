@@ -553,7 +553,6 @@ export const DE_MESSAGES = {
   },
   'w3u.browserBadge': 'Browser',
   'w3u.openInBrowser': 'Im TV-Browser öffnen',
-  'w3u.browserNote': 'Dieser Titel wird auf einer eigenen Website abgespielt. Öffnen Sie ihn im TV-Browser, um ihn anzusehen.',
   'w3u.starting': 'Wird gestartet…',
   'w3u.browserUnavailable': "Der TV-Browser konnte nicht geöffnet werden.",
   'w3u.linkIdle': "Wählen Sie diese Wiedergabeliste aus, um ihre Titel zu sehen.",
