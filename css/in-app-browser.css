@@ -49,6 +49,7 @@ body.tabbar-docked #view-browser {
   outline: none;
 }
 .ab-btn.focused { border-color: var(--text-primary); }
+.ab-btn-primary { background: var(--accent, #3ea6ff); color: #fff; }
 .ab-btn-icon {
   display: inline-flex;
   flex: 0 0 auto;

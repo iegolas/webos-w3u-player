@@ -5,10 +5,13 @@ import { resolve } from 'node:path';
 import { CONFIG } from '../config';
 import type { Action, Channel, PlaylistGroupLink, W3uGroupLink } from '../types';
 import { Focus } from '../navigation/focus-scope';
+import { HostCapabilityService } from '../services/host-capability';
+import { StorageService } from '../services/storage-service';
 import { fetchAndParseM3U } from '../parsers/m3u-loader';
 import { W3U_LINK_LIMITS, pinFailureCopy } from './w3u-model';
 import type { GroupPinRequest, GroupPinResult, PinnedLinkNotice, PinnedLinkReason } from '../services/playlist-service';
 import { W3uView, type W3uHandlers } from './w3u-view';
+import { qrCodeDataUrl } from '../utils/qr';
 
 vi.mock('../parsers/m3u-loader', () => ({ fetchAndParseM3U: vi.fn() }));
 const fetchMock = vi.mocked(fetchAndParseM3U);
@@ -58,6 +61,7 @@ function open(channels: Channel[], links: PlaylistGroupLink[] = [], rootUrls: st
 }
 
 beforeEach(() => {
+  HostCapabilityService.reset();
   fetchMock.mockReset();
   document.documentElement.classList.remove('keyboard-nav');
   Focus.uninstall();
@@ -1540,5 +1544,261 @@ describe('W3uView show in Live', () => {
       pressKey(view, 'up');
       expect(asked.mock.calls.length).toBe(first * 2);
     });
+  });
+});
+
+describe('W3uView host capability', () => {
+  const url = 'http://host/a.mp4';
+  const detail = (key: string): HTMLElement => container.querySelector<HTMLElement>(`.w3u-layer-detail [data-key="${key}"]`)!;
+  const usable = (): string[] => Array.from(container.querySelectorAll('.w3u-layer-detail [data-focusable]'))
+    .map((el) => el.getAttribute('data-key') ?? '');
+  const note = (): string | undefined => container.querySelector('.w3u-layer-detail .w3u-action-note')?.textContent?.trim();
+
+  function openDetail(): W3uView {
+    const view = open([station('Alpha', 'Group A')]);
+    pressKey(view, 'select');
+    return view;
+  }
+
+  it('enables every action while nothing is known', () => {
+    openDetail();
+    expect(usable()).toEqual(['d:action', 'd:app', 'd:browser']);
+    expect(container.querySelector('.w3u-layer-detail [aria-disabled]')).toBeNull();
+    expect(note()).toBeUndefined();
+    expect(focusedKeys()).toEqual(['d:action']);
+  });
+
+  it('keeps every action when a fact is explicitly unknown', () => {
+    HostCapabilityService.setPlayable(url, 'unknown');
+    HostCapabilityService.setFramable(url, 'unknown');
+    openDetail();
+    expect(usable()).toEqual(['d:action', 'd:app', 'd:browser']);
+  });
+
+  it('disables Play for a host that cannot be resolved, and says what to use', () => {
+    HostCapabilityService.setPlayable(url, false);
+    const view = openDetail();
+    const play = detail('d:action');
+    expect(play.getAttribute('aria-disabled')).toBe('true');
+    expect(play.hasAttribute('data-focusable')).toBe(false);
+    expect(play.classList.contains('detail-btn-disabled')).toBe(true);
+    expect(play.getAttribute('aria-describedby')).toBe('w3u-action-note');
+    expect(usable()).toEqual(['d:app', 'd:browser']);
+    expect(note()).toBe("This site can't play inside the app. Try Open in app browser or Open in TV browser.");
+    // The ring starts on a usable action, and the lead accent moves with it.
+    expect(focusedKeys()).toEqual(['d:app']);
+    expect(detail('d:app').classList.contains('detail-btn-primary')).toBe(true);
+    pressKey(view, 'left');
+    expect(focusedKeys()).toEqual(['d:app']);
+    pressKey(view, 'select');
+    expect(handlers.onOpenInApp).toHaveBeenCalledTimes(1);
+    expect(handlers.onPlay).not.toHaveBeenCalled();
+  });
+
+  it('disables Open in app browser for a site that refuses frames, and keeps Play', () => {
+    HostCapabilityService.setFramable(url, false);
+    const view = openDetail();
+    const app = detail('d:app');
+    expect(app.getAttribute('aria-disabled')).toBe('true');
+    expect(app.hasAttribute('data-focusable')).toBe(false);
+    expect(usable()).toEqual(['d:action', 'd:browser']);
+    expect(note()).toBe("This site can't be shown inside the app. Use Open in TV browser.");
+    expect(focusedKeys()).toEqual(['d:action']);
+    expect(detail('d:action').classList.contains('detail-btn-primary')).toBe(true);
+    pressKey(view, 'right');
+    expect(focusedKeys()).toEqual(['d:browser']);
+    pressKey(view, 'right');
+    expect(focusedKeys()).toEqual(['d:browser']);
+    pressKey(view, 'left');
+    expect(focusedKeys()).toEqual(['d:action']);
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+  });
+
+  it('leaves only the TV browser, with the accent and focus, when both are disabled', () => {
+    HostCapabilityService.setPlayable(url, false);
+    HostCapabilityService.setFramable(url, false);
+    const view = openDetail();
+    expect(usable()).toEqual(['d:browser']);
+    expect(focusedKeys()).toEqual(['d:browser']);
+    expect(detail('d:browser').classList.contains('detail-btn-primary')).toBe(true);
+    expect(note()).toBe("This site can't play or be shown inside the app. Use Open in TV browser.");
+    pressKey(view, 'left');
+    pressKey(view, 'right');
+    expect(focusedKeys()).toEqual(['d:browser']);
+    pressKey(view, 'select');
+    expect(handlers.onOpenInBrowser).toHaveBeenCalledTimes(1);
+    expect(handlers.onPlay).not.toHaveBeenCalled();
+    expect(handlers.onOpenInApp).not.toHaveBeenCalled();
+  });
+
+  it('redraws the open detail when a fact is learned, and moves the ring off a disabled action', () => {
+    const view = openDetail();
+    expect(focusedKeys()).toEqual(['d:action']);
+    HostCapabilityService.setPlayable(url, false);
+    view.resumeFocus();
+    Focus.flush();
+    expect(detail('d:action').getAttribute('aria-disabled')).toBe('true');
+    expect(note()).toContain("can't play inside the app");
+    expect(focusedKeys()).toEqual(['d:app']);
+    expect(container.querySelectorAll('.focused')).toHaveLength(1);
+  });
+
+  it('redraws on the next key, and the key acts from the new place', () => {
+    const view = openDetail();
+    pressKey(view, 'right');
+    expect(focusedKeys()).toEqual(['d:app']);
+    HostCapabilityService.setFramable(url, false);
+    pressKey(view, 'right');
+    expect(usable()).toEqual(['d:action', 'd:browser']);
+    expect(focusedKeys()).toEqual(['d:browser']);
+    expect(handlers.onOpenInApp).not.toHaveBeenCalled();
+  });
+
+  it('enables an action again when the fact is cleared', () => {
+    HostCapabilityService.setPlayable(url, false);
+    const view = openDetail();
+    HostCapabilityService.setPlayable(url, 'unknown');
+    view.resumeFocus();
+    Focus.flush();
+    expect(usable()).toEqual(['d:action', 'd:app', 'd:browser']);
+    expect(note()).toBeUndefined();
+    expect(detail('d:action').hasAttribute('aria-disabled')).toBe(false);
+  });
+
+  it('updates a Play that was learned unplayable while it was starting', async () => {
+    let settle: () => void = () => undefined;
+    handlers.onPlay.mockReturnValue(new Promise<void>((done) => { settle = done; }));
+    const view = open([resolvableStation('Delta', 'Group A')]);
+    pressKey(view, 'select');
+    pressKey(view, 'select');
+    expect(detail('d:action').getAttribute('aria-busy')).toBe('true');
+    HostCapabilityService.setPlayable('http://page.test/videoembed/1', false);
+    settle();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(detail('d:action').getAttribute('aria-disabled')).toBe('true');
+    expect(container.querySelector('.w3u-busy')).toBeNull();
+    expect(focusedKeys()).toEqual(['d:app']);
+  });
+
+  it('ignores OK on an action that went disabled', () => {
+    const view = openDetail();
+    HostCapabilityService.setPlayable(url, false);
+    pressKey(view, 'select');
+    expect(handlers.onPlay).not.toHaveBeenCalled();
+  });
+});
+
+describe('W3uView item URL debug panel', () => {
+  const panel = (): HTMLElement | null => container.querySelector('.w3u-layer-detail .w3u-debug');
+  const keys = (): string[] => Array.from(container.querySelectorAll('.w3u-layer-detail [data-focusable]'))
+    .map((el) => el.getAttribute('data-key') ?? '');
+
+  const channels = (url: string): Channel[] => [station('Alpha', 'Group A', { url })];
+
+  function openDetail(list: Channel[] = channels('http://host/a.mp4')): W3uView {
+    const view = open(list);
+    pressKey(view, 'select');
+    return view;
+  }
+
+  beforeEach(() => localStorage.clear());
+  afterEach(() => localStorage.clear());
+
+  it('is off by default and draws no panel', () => {
+    expect(StorageService.getShowItemUrl()).toBe(false);
+    openDetail();
+    expect(panel()).toBeNull();
+    expect(container.querySelector('.w3u-detail-debug')).toBeNull();
+  });
+
+  it('shows the exact address and a QR image made from it when on', () => {
+    StorageService.setShowItemUrl(true);
+    expect(StorageService.getShowItemUrl()).toBe(true);
+    const url = 'http://user:pass@host.test/a.m3u8?token=abc&x=1';
+    openDetail(channels(url));
+    const el = panel()!;
+    expect(el.querySelector('.w3u-debug-url')?.textContent).toBe(url);
+    const img = el.querySelector<HTMLImageElement>('img.w3u-debug-qr')!;
+    expect(img.getAttribute('src')).toMatch(/^data:image\/gif;base64,/);
+    expect(img.getAttribute('src')).toBe(qrCodeDataUrl(url));
+    expect(img.getAttribute('alt')).toBe(`QR code linking to ${url}`);
+    expect(el.querySelector('.w3u-debug-hint')?.textContent).toBe('Scan to open on your phone');
+    expect(el.querySelector('.w3u-debug-label')?.textContent).toBe('Item URL');
+  });
+
+  it('shows the station address for an embed too', () => {
+    StorageService.setShowItemUrl(true);
+    openDetail([embedStation('Alpha', 'Group A')]);
+    expect(panel()?.querySelector('.w3u-debug-url')?.textContent).toBe('http://browser.test/page');
+  });
+
+  it('is no stop for the keys and leaves the D-pad order alone', () => {
+    StorageService.setShowItemUrl(true);
+    const view = openDetail();
+    expect(keys()).toEqual(['d:action', 'd:app', 'd:browser']);
+    expect(panel()?.querySelector('[data-focusable]')).toBeNull();
+    expect(focusedKeys()).toEqual(['d:action']);
+    pressKey(view, 'right');
+    pressKey(view, 'right');
+    pressKey(view, 'right');
+    expect(focusedKeys()).toEqual(['d:browser']);
+    pressKey(view, 'left');
+    expect(focusedKeys()).toEqual(['d:app']);
+  });
+
+  it('keeps the full text and all three actions before it for a very long address', () => {
+    StorageService.setShowItemUrl(true);
+    const url = `http://host.test/${'segment/'.repeat(120)}file.m3u8?${'q=1&'.repeat(40)}`;
+    openDetail(channels(url));
+    const body = container.querySelector('.w3u-layer-detail .detail-body')!;
+    expect(panel()?.querySelector('.w3u-debug-url')?.textContent).toBe(url);
+    expect(panel()?.querySelector('.w3u-debug-url-long')).not.toBeNull();
+    expect(panel()?.querySelector('img.w3u-debug-qr')).not.toBeNull();
+    expect(keys()).toEqual(['d:action', 'd:app', 'd:browser']);
+    const children = Array.from(body.children);
+    expect(children.indexOf(body.querySelector('.detail-actions')!)).toBeLessThan(children.indexOf(panel()!));
+  });
+
+  it('says so, and draws no image, when the address cannot fit in a QR code', () => {
+    StorageService.setShowItemUrl(true);
+    const url = `http://host.test/${'a'.repeat(4000)}`;
+    openDetail(channels(url));
+    expect(panel()?.querySelector('img')).toBeNull();
+    expect(panel()?.querySelector('.w3u-debug-url')?.textContent).toBe(url);
+    expect(panel()?.querySelector('.w3u-debug-hint')?.textContent).toBe('This address is too long for a QR code.');
+  });
+
+  it('survives a redraw of the detail', () => {
+    StorageService.setShowItemUrl(true);
+    const list = channels('http://host/a.mp4');
+    const view = openDetail(list);
+    const before = panel()!.innerHTML;
+    HostCapabilityService.setPlayable('http://host/a.mp4', false);
+    view.refreshPins();
+    expect(panel()?.innerHTML).toBe(before);
+    view.open(list);
+    expect(panel()?.innerHTML).toBe(before);
+  });
+
+  it('draws the panel when turned on, and removes it when turned off, without reopening', () => {
+    const view = openDetail();
+    expect(panel()).toBeNull();
+    StorageService.setShowItemUrl(true);
+    view.resumeFocus();
+    expect(panel()).not.toBeNull();
+    expect(focusedKeys()).toEqual(['d:action']);
+    StorageService.setShowItemUrl(false);
+    pressKey(view, 'right');
+    expect(panel()).toBeNull();
+    expect(container.querySelector('.w3u-detail-debug')).toBeNull();
+    expect(focusedKeys()).toEqual(['d:app']);
+    expect(keys()).toEqual(['d:action', 'd:app', 'd:browser']);
+  });
+
+  it('does not touch the Library grid', () => {
+    StorageService.setShowItemUrl(true);
+    open([station('Alpha', 'Group A')]);
+    expect(container.querySelector('.w3u-layer-library .w3u-debug')).toBeNull();
   });
 });

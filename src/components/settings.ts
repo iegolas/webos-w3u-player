@@ -734,6 +734,7 @@ export class Settings {
     const epgSources = this.epgSources(manualEpgSources, allPlaylists);
     const autoPlay = StorageService.getAutoPlay();
     const livePreview = StorageService.getLivePreview();
+    const showItemUrl = StorageService.getShowItemUrl();
     const channelCycleMode = StorageService.getChannelCycleMode();
     const showHidden = StorageService.getShowHiddenChannels();
     const showGuideTab = StorageService.getShowGuideTab();
@@ -1178,6 +1179,18 @@ export class Settings {
                       </div>
                     </div>
                   ` : ''}
+                  <div class="settings-advanced-row">
+                    <div class="settings-advanced-group">
+                      ${t('settings.advancedGroupDebug')}
+                    </div>
+                    <div class="settings-advanced-description">
+                      <div class="settings-item-title">${t('settings.showItemUrl')}</div>
+                      <div class="settings-item-hint">${t('settings.showItemUrlHint')}</div>
+                    </div>
+                    <div class="settings-advanced-control">
+                    ${toggleGroup('show-item-url', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], showItemUrl ? 'on' : 'off')}
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2879,6 +2892,9 @@ export class Settings {
 
     const livePreviewBtn = $('#live-preview-setting .toggle-option.active', this.container);
     if (livePreviewBtn) StorageService.setLivePreview(livePreviewBtn.dataset.value === 'on');
+
+    const showItemUrlBtn = $('#show-item-url .toggle-option.active', this.container);
+    if (showItemUrlBtn) StorageService.setShowItemUrl(showItemUrlBtn.dataset.value === 'on');
 
     const channelCycleBtn = $('#channel-cycle-mode .toggle-option.active', this.container);
     if (channelCycleBtn?.dataset.value) {

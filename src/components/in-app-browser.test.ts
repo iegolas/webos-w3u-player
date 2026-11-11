@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Action } from '../types';
 import { Focus } from '../navigation/focus-scope';
+import { HostCapabilityService } from '../services/host-capability';
 import { FRAME_LOAD_TIMEOUT_MS, InAppBrowser, frameTarget, type InAppBrowserHandlers } from './in-app-browser';
 
 const URL_A = 'https://host.test/embed/1';
@@ -33,6 +34,7 @@ function openPage(url = URL_A): void {
 }
 
 beforeEach(() => {
+  HostCapabilityService.reset();
   document.documentElement.classList.remove('keyboard-nav');
   Focus.uninstall();
   document.body.innerHTML = '';
@@ -327,6 +329,41 @@ describe('InAppBrowser', () => {
       expect(logged[0]).toContain('reason=timeout');
       expect(JSON.stringify(warn.mock.calls)).not.toContain('host.test');
       expect(JSON.stringify(warn.mock.calls)).not.toContain('secret1');
+    });
+
+    it('records the site as unframable and makes Open in TV browser the lead action', () => {
+      vi.useFakeTimers();
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      openPage('https://user1:secret1@host.test/embed/1');
+      expect(HostCapabilityService.getFramable('https://host.test/other')).toBe('unknown');
+      vi.advanceTimersByTime(FRAME_LOAD_TIMEOUT_MS);
+      expect(HostCapabilityService.getFramable('https://host.test/other')).toBe(false);
+      const card = container.querySelector('.ab-card[role="alert"]')!;
+      expect(card.querySelector('.ab-card-hint')?.textContent).toBe("This page can't be shown inside the app. Use Open in TV browser.");
+      const action = card.querySelector('.ab-btn')!;
+      expect(action.classList.contains('ab-btn-primary')).toBe(true);
+      expect(action.textContent?.trim()).toBe('Open in TV browser');
+      pressKey('down');
+      pressKey('select');
+      expect(handlers.onOpenExternal).toHaveBeenCalledWith('https://user1:secret1@host.test/embed/1');
+    });
+
+    it('does not blame the site when the TV is offline', () => {
+      const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false);
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      openPage();
+      expect(container.querySelector('.ab-card[role="alert"]')).not.toBeNull();
+      expect(HostCapabilityService.getFramable(URL_A)).toBe('unknown');
+      expect(container.querySelector('.ab-card-hint')?.textContent).not.toContain("can't be shown inside the app");
+      online.mockRestore();
+    });
+
+    it('never records a page that loaded', () => {
+      vi.useFakeTimers();
+      openPage();
+      frame()!.dispatchEvent(new Event('load'));
+      vi.advanceTimersByTime(FRAME_LOAD_TIMEOUT_MS * 2);
+      expect(HostCapabilityService.getFramable(URL_A)).toBe('unknown');
     });
 
     it('reaches the failure button with Down, runs it with OK, and returns with Up', () => {

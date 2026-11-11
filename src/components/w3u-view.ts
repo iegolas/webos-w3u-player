@@ -9,6 +9,9 @@ import { VirtualGrid } from '../utils/virtual-grid';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
 import { CONFIG } from '../config';
+import { HostCapabilityService } from '../services/host-capability';
+import { StorageService } from '../services/storage-service';
+import { qrCodeDataUrl } from '../utils/qr';
 import { t, tp } from '../i18n';
 import { CHEVRON_RIGHT_ICON, GLOBE_ICON, PLAY_ICON, pinIcon } from './icons';
 import type { GroupPinRequest, GroupPinResult, PinnedLinkNotice } from '../services/playlist-service';
@@ -48,6 +51,8 @@ const GROUP_VIEWPORT_HEIGHT = 840;
 // Pins that need a word each are shown one after another; this many at most.
 const NOTICE_MAX = 3;
 const NOTICE_GAP_MS = 3400;
+// Past this many characters the debug address is set smaller, to fit more lines.
+const DEBUG_URL_LONG = 160;
 
 type Mode = 'library' | 'detail';
 type Region = 'group' | 'pin' | 'tile' | 'detail';
@@ -155,6 +160,12 @@ export class W3uView {
   // What the service said per pin key at `pinRevision`; a new revision clears it.
   private readonly pinState = new Map<string, boolean>();
   private pinRevision = -1;
+  // What the capability service knew when the detail was last drawn.
+  private capabilityRevision = -1;
+  // Whether the open detail was drawn with the debug address panel, and the
+  // last QR made for it (one address is drawn again and again).
+  private debugDrawn = false;
+  private qrCache: { url: string; src: string | null } | null = null;
   private noticeQueue: string[] = [];
   private noticeTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly layers: Record<Mode, HTMLElement>;
@@ -245,6 +256,10 @@ export class W3uView {
   // The badges follow the service: called when the viewer comes back to the
   // Library or presses a key, it redraws only when the pins changed meanwhile.
   refreshPins(): void {
+    // A fact learned elsewhere (a failed page, a failed Play) redraws the open detail.
+    if (this.mode === 'detail'
+      && (HostCapabilityService.revision !== this.capabilityRevision
+        || StorageService.getShowItemUrl() !== this.debugDrawn)) this.renderDetail();
     if (!this.syncPins()) return;
     if (this.mode === 'library') this.renderLibrary();
     this.surfaceNotices();
@@ -346,14 +361,14 @@ export class W3uView {
   private hasKey(key: string): boolean {
     const parsed = parseKey(key);
     if (!parsed) return false;
-    if (parsed.region === 'detail') return this.mode === 'detail';
+    if (parsed.region === 'detail') return this.mode === 'detail' && this.detailKeys().indexOf(key) >= 0;
     if (this.mode !== 'library') return false;
     if (parsed.region === 'pin') return this.pinRequest(parsed.index) !== null;
     return parsed.index < (parsed.region === 'group' ? this.groups.length : this.stations.length);
   }
 
   private defaultKey(): string | null {
-    if (this.mode === 'detail') return DETAIL_KEY;
+    if (this.mode === 'detail') return this.detailKeys()[0];
     if (this.stations.length) return `t:${Math.min(this.gridFocus, this.stations.length - 1)}`;
     return this.groups.length ? `g:${this.groupIndex}` : null;
   }
@@ -720,10 +735,28 @@ export class W3uView {
     else if (action === 'up') this.handlers.onRevealTabBar();
     else if (action === 'select') this.activate(this.focusScope.focusKey);
     else if (action === 'left' || action === 'right') {
-      const at = DETAIL_KEYS.indexOf(this.focusScope.focusKey ?? DETAIL_KEY);
-      const next = DETAIL_KEYS[Math.max(0, Math.min(DETAIL_KEYS.length - 1, at + (action === 'right' ? 1 : -1)))];
+      // Only usable actions are stops; a disabled one is stepped over.
+      const keys = this.detailKeys();
+      const at = keys.indexOf(this.focusScope.focusKey ?? '');
+      const next = at < 0 ? keys[0] : keys[Math.max(0, Math.min(keys.length - 1, at + (action === 'right' ? 1 : -1)))];
       this.request(next, 'key');
     }
+  }
+
+  // The actions the title's host allows. A fact not learned yet allows both.
+  private detailAccess(station: W3uStation): { play: boolean; app: boolean } {
+    const url = station.channel.url;
+    return {
+      play: HostCapabilityService.getPlayable(url) !== false,
+      app: HostCapabilityService.getFramable(url) !== false,
+    };
+  }
+
+  private detailKeys(): string[] {
+    if (!this.detail) return [DETAIL_BROWSER_KEY];
+    const access = this.detailAccess(this.detail);
+    return DETAIL_KEYS.filter((key) => key === DETAIL_BROWSER_KEY
+      || (key === DETAIL_KEY ? access.play : access.app));
   }
 
   // --- detail ---
@@ -736,7 +769,7 @@ export class W3uView {
     this.showLayer('detail');
     this.renderDetail();
     this.focusScope.track(null);
-    this.request(DETAIL_KEY, this.placementVia());
+    this.request(this.defaultKey(), this.placementVia());
   }
 
   private closeDetail(): void {
@@ -751,6 +784,7 @@ export class W3uView {
   private activate(key: string | null): void {
     const station = this.detail;
     if (!station || this.starting) return;
+    if (key !== null && this.detailKeys().indexOf(key) < 0) return;
     if (key === DETAIL_APP_KEY) {
       this.handlers.onOpenInApp(station);
       return;
@@ -994,34 +1028,69 @@ export class W3uView {
     `;
   }
 
+  // The debug aid: the address the title points at, in full and wrapped so it
+  // can be compared with a phone, and a QR of it. Not a stop for the keys.
+  private debugPanel(url: string): Safe {
+    if (this.qrCache?.url !== url) this.qrCache = { url, src: qrCodeDataUrl(url) };
+    const src = this.qrCache.src;
+    return html`
+      <div class="w3u-debug">
+        ${src ? html`<img class="w3u-debug-qr" alt="${t('settings.qrAlt', { url })}" src="${src}">` : ''}
+        <div class="w3u-debug-text">
+          <div class="w3u-debug-label">${t('w3u.debugUrlLabel')}</div>
+          <p class="w3u-debug-url${url.length > DEBUG_URL_LONG ? ' w3u-debug-url-long' : ''}">${url}</p>
+          <p class="w3u-debug-hint">${t(src ? 'w3u.debugScanHint' : 'w3u.debugQrTooLong')}</p>
+        </div>
+      </div>`;
+  }
+
   private renderDetail(): void {
     const station = this.detail;
     if (!station) return;
     const busy = this.starting === station;
+    const access = this.detailAccess(station);
+    this.capabilityRevision = HostCapabilityService.revision;
+    this.debugDrawn = StorageService.getShowItemUrl();
+    // The first usable action carries the accent, so the way forward is plain.
+    const lead = this.detailKeys()[0];
+    const tv = t('w3u.openInBrowser');
+    const note = !access.play && !access.app ? t('w3u.inAppUnavailable', { tv })
+      : !access.play ? t('w3u.playUnavailable', { app: t('w3u.openInApp'), tv })
+        : !access.app ? t('w3u.appUnavailable', { tv })
+          : '';
+    // A disabled action stays drawn, but is no stop for the keys or the pointer.
+    const action = (key: string, usable: boolean, extra: string, body: Safe, state: Safe | '' = ''): Safe => usable
+      ? html`<button class="detail-btn${key === lead ? ' detail-btn-primary' : ''}${extra}" type="button"
+                    data-focusable data-key="${key}" ${state}>${body}</button>`
+      : html`<button class="detail-btn detail-btn-disabled" type="button" disabled aria-disabled="true"
+                    data-key="${key}" aria-describedby="w3u-action-note">${body}</button>`;
     morph(this.layers.detail, html`
-      <div class="catalog-view movies-detail w3u-detail" data-nav-container>
+      <div class="catalog-view movies-detail w3u-detail${this.debugDrawn ? ' w3u-detail-debug' : ''}" data-nav-container>
         <div class="detail-poster-wrap">${this.posterCell(station.name, station.poster)}</div>
         <div class="detail-body">
           <h1 class="detail-title">${station.name}</h1>
           ${station.genres.length ? html`<div class="detail-meta">${station.genres.join('  ·  ')}</div>` : ''}
           ${station.synopsis ? html`<p class="detail-plot w3u-synopsis">${station.synopsis}</p>` : ''}
           <div class="detail-actions">
-            <button class="detail-btn detail-btn-primary${busy ? ' w3u-busy' : ''}" type="button"
-                    data-focusable data-key="${DETAIL_KEY}" aria-busy="${busy ? 'true' : 'false'}">
+            ${action(DETAIL_KEY, access.play, busy ? ' w3u-busy' : '', html`
               <span class="detail-btn-icon">${busy ? '' : raw(PLAY_ICON)}</span>
-              <span>${t(busy ? 'w3u.starting' : 'catalog.play')}</span>
-            </button>
-            <button class="detail-btn" type="button" data-focusable data-key="${DETAIL_APP_KEY}">
+              <span>${t(busy ? 'w3u.starting' : 'catalog.play')}</span>`, raw(`aria-busy="${busy}"`))}
+            ${action(DETAIL_APP_KEY, access.app, '', html`
               <span class="detail-btn-icon w3u-glyph">${raw(APP_BROWSER_ICON)}</span>
-              <span>${t('w3u.openInApp')}</span>
-            </button>
-            <button class="detail-btn" type="button" data-focusable data-key="${DETAIL_BROWSER_KEY}">
+              <span>${t('w3u.openInApp')}</span>`)}
+            ${action(DETAIL_BROWSER_KEY, true, '', html`
               <span class="detail-btn-icon w3u-glyph">${raw(GLOBE_ICON)}</span>
-              <span>${t('w3u.openInBrowser')}</span>
-            </button>
+              <span>${tv}</span>`)}
           </div>
+          ${note ? html`<p class="w3u-action-note" id="w3u-action-note" role="note">${note}</p>` : ''}
+          ${this.debugDrawn ? this.debugPanel(station.channel.url) : ''}
         </div>
       </div>
     `);
+    // A learned fact can disable the action the ring sat on: move it to a usable one.
+    const key = this.focusScope.focusKey;
+    if (key !== null && parseKey(key)?.region === 'detail' && !this.hasKey(key)) {
+      this.request(this.defaultKey(), this.placementVia());
+    }
   }
 }

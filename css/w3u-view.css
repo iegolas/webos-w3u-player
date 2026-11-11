@@ -325,6 +325,62 @@
 }
 .w3u-detail .detail-btn-icon.w3u-glyph { width: 28px; height: 28px; }
 
+/* An action the title's site cannot do here: drawn flat with a dashed edge,
+   not a stop for the keys, with the reason under the row. */
+.w3u-detail .detail-btn-disabled {
+  background: transparent;
+  border: 3px dashed var(--text-secondary);
+  color: var(--text-secondary);
+  cursor: default;
+}
+.w3u-detail .detail-btn-disabled .detail-btn-icon { opacity: 0.5; }
+.w3u-action-note {
+  max-width: 1000px;
+  margin: 20px 0 0;
+  font-size: 24px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* Debug aid under the actions: the title's address in full (wrapped, never cut
+   to fit, so it can be compared with a phone) beside a QR of it. The synopsis
+   gives up lines so the panel stays on screen. */
+.w3u-detail-debug .w3u-synopsis { -webkit-line-clamp: 5; }
+.w3u-debug {
+  display: flex;
+  align-items: flex-start;
+  margin-top: 32px;
+  padding: 20px;
+  box-sizing: border-box;
+  border-radius: 12px;
+  background: var(--catalog-surface);
+}
+/* The image carries its own white margin; whole pixels per dot stay crisp. */
+.w3u-debug-qr {
+  display: block;
+  flex: 0 0 auto;
+  margin-right: 32px;
+  border-radius: 4px;
+  background: #fff;
+  image-rendering: pixelated;
+}
+.w3u-debug-text { flex: 1 1 0; min-width: 0; }
+.w3u-debug-label { font-size: 20px; font-weight: 600; color: var(--text-secondary); }
+.w3u-debug-url {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 12;
+  overflow: hidden;
+  margin: 8px 0 0;
+  font-family: monospace;
+  font-size: 22px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  word-break: break-all;
+}
+.w3u-debug-url-long { font-size: 18px; }
+.w3u-debug-hint { margin: 16px 0 0; font-size: 20px; color: var(--text-secondary); }
+
 /* Play on a title that still has to be looked up: the icon becomes a spinner
    (the shared `spin` keyframes) and the label says it is starting. */
 .w3u-busy .detail-btn-icon {

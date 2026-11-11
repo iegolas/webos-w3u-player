@@ -7,7 +7,9 @@ import { EpgService } from './services/epg-service';
 import { ChannelHealthService } from './services/channel-health';
 import * as embedResolver from './services/embed-resolver';
 import * as browserLaunch from './services/browser-launch';
+import { HostCapabilityService } from './services/host-capability';
 import * as w3uModel from './components/w3u-model';
+import { t } from './i18n';
 import type { Channel } from './types';
 
 type AppInternals = {
@@ -63,6 +65,7 @@ describe('App W3U playback routing', () => {
   let app: AppInternals;
 
   beforeEach(() => {
+    HostCapabilityService.reset();
     app = makeApp();
   });
 
@@ -112,7 +115,7 @@ describe('App W3U playback routing', () => {
     expect(app.w3uReturn).toBe(true);
   });
 
-  it('hands a generic embed page whose resolve fails to the TV browser', async () => {
+  it('reports a failed Library resolve in place, never in the TV browser', async () => {
     vi.spyOn(PlaylistService, 'indexOf').mockReturnValue(-1);
     const resolve = vi.spyOn(embedResolver, 'resolveEmbedStream')
       .mockResolvedValue({ ok: false, reason: 'no_metadata' });
@@ -123,10 +126,51 @@ describe('App W3U playback routing', () => {
     await app.playW3uChannel(title);
 
     expect(resolve).toHaveBeenCalledOnce();
-    expect(open).toHaveBeenCalledWith('http://host/embed/1');
+    expect(open).not.toHaveBeenCalled();
     expect(app.player.playChannel).not.toHaveBeenCalled();
     expect(app.player.play).not.toHaveBeenCalled();
     expect(app.w3uReturn).toBe(false);
+    expect(HostCapabilityService.getPlayable(title.url)).toBe(false);
+    expect(document.querySelector('.toast')?.textContent).toBe(t('player.unableToPlay'));
+  });
+
+  it('disables Play for an extensionless page on an unknown host after its resolve fails', async () => {
+    vi.spyOn(PlaylistService, 'indexOf').mockReturnValue(-1);
+    vi.spyOn(embedResolver, 'resolveEmbedStream')
+      .mockResolvedValue({ ok: false, reason: 'no_metadata' });
+    const title = channel({ url: 'http://page.test/d/1' });
+
+    expect(w3uModel.classifyStation(title)).toBe('resolvable');
+    await app.playW3uChannel(title);
+
+    expect(HostCapabilityService.getPlayable(title.url)).toBe(false);
+    expect(app.player.playChannel).not.toHaveBeenCalled();
+  });
+
+  it('skips the resolver for a Library title already known unplayable', () => {
+    vi.spyOn(PlaylistService, 'indexOf').mockReturnValue(-1);
+    const resolve = vi.spyOn(embedResolver, 'resolveEmbedStream');
+    const open = vi.spyOn(browserLaunch, 'openInBrowser');
+    const title = channel({ url: 'http://host/embed/1' });
+    HostCapabilityService.recordResolve(title.url, { ok: false, reason: 'no_metadata' });
+
+    app.playW3uChannel(title);
+
+    expect(resolve).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
+    expect(app.player.play).not.toHaveBeenCalled();
+    expect(app.player.playChannel).not.toHaveBeenCalled();
+  });
+
+  it('leaves a Library host unknown after a network failure', async () => {
+    vi.spyOn(PlaylistService, 'indexOf').mockReturnValue(-1);
+    vi.spyOn(embedResolver, 'resolveEmbedStream')
+      .mockResolvedValue({ ok: false, reason: 'unavailable' });
+    const title = channel({ url: 'http://host/embed/1' });
+
+    await app.playW3uChannel(title);
+
+    expect(HostCapabilityService.getPlayable(title.url)).toBe('unknown');
   });
 
   it('does not open the browser when the viewer backs out of a resolve', async () => {
@@ -173,6 +217,7 @@ describe('App Live page routing', () => {
   let app: AppInternals;
 
   beforeEach(() => {
+    HostCapabilityService.reset();
     app = makeApp();
   });
 
@@ -197,6 +242,20 @@ describe('App Live page routing', () => {
     expect(external).not.toHaveBeenCalled();
   });
 
+  it('routes an extensionless page on an unknown host through the resolver', async () => {
+    const title = channel({ url: 'http://page.test/d/1' });
+    vi.spyOn(PlaylistService, 'getByIndex').mockReturnValue(title);
+    const resolve = vi.spyOn(embedResolver, 'resolveEmbedStream')
+      .mockResolvedValue({ ok: false, reason: 'no_metadata' });
+
+    app.playChannel(4);
+    await vi.waitFor(() => expect(app.browser.open).toHaveBeenCalledOnce());
+
+    expect(w3uModel.classifyStation(title)).toBe('resolvable');
+    expect(resolve).toHaveBeenCalledWith('http://page.test/d/1', {}, expect.anything());
+    expect(app.player.play).not.toHaveBeenCalled();
+  });
+
   it('opens a browser-classified Live channel in the in-app Browser directly', () => {
     vi.spyOn(PlaylistService, 'getByIndex')
       .mockReturnValue(channel({ url: 'http://host/watch/1' }));
@@ -208,6 +267,82 @@ describe('App Live page routing', () => {
     expect(app.browser.open).toHaveBeenCalledWith('http://host/watch/1');
     expect(app.player.play).not.toHaveBeenCalled();
     expect(external).not.toHaveBeenCalled();
+  });
+
+  it('opens the TV browser when the page host refuses framing', async () => {
+    const title = channel({ url: 'http://host/embed/1' });
+    vi.spyOn(PlaylistService, 'getByIndex').mockReturnValue(title);
+    vi.spyOn(w3uModel, 'classifyStation').mockReturnValue('resolvable');
+    vi.spyOn(embedResolver, 'resolveEmbedStream')
+      .mockResolvedValue({ ok: false, reason: 'no_metadata' });
+    const external = vi.spyOn(browserLaunch, 'openInBrowser').mockResolvedValue(true);
+    HostCapabilityService.setFramable(title.url, false);
+
+    app.playChannel(4);
+    await vi.waitFor(() => expect(external).toHaveBeenCalledOnce());
+
+    expect(external).toHaveBeenCalledWith('http://host/embed/1');
+    expect(app.browser.open).not.toHaveBeenCalled();
+    expect(app.player.play).not.toHaveBeenCalled();
+  });
+
+  it('keeps a framable host in the in-app Browser after a failed resolve', async () => {
+    const title = channel({ url: 'http://host/embed/1' });
+    vi.spyOn(PlaylistService, 'getByIndex').mockReturnValue(title);
+    vi.spyOn(w3uModel, 'classifyStation').mockReturnValue('resolvable');
+    vi.spyOn(embedResolver, 'resolveEmbedStream')
+      .mockResolvedValue({ ok: false, reason: 'no_metadata' });
+    const external = vi.spyOn(browserLaunch, 'openInBrowser');
+    HostCapabilityService.setFramable(title.url, true);
+
+    app.playChannel(4);
+    await vi.waitFor(() => expect(app.browser.open).toHaveBeenCalledOnce());
+
+    expect(app.browser.open).toHaveBeenCalledWith('http://host/embed/1');
+    expect(external).not.toHaveBeenCalled();
+    expect(HostCapabilityService.getPlayable(title.url)).toBe(false);
+  });
+
+  it('skips the resolver for a host already known unplayable', () => {
+    const title = channel({ url: 'http://host/embed/1' });
+    vi.spyOn(PlaylistService, 'getByIndex').mockReturnValue(title);
+    vi.spyOn(w3uModel, 'classifyStation').mockReturnValue('resolvable');
+    const resolve = vi.spyOn(embedResolver, 'resolveEmbedStream');
+    HostCapabilityService.recordResolve(title.url, { ok: false, reason: 'no_metadata' });
+
+    app.playChannel(4);
+
+    expect(resolve).not.toHaveBeenCalled();
+    expect(app.browser.open).toHaveBeenCalledWith('http://host/embed/1');
+  });
+
+  it('sends a known-unplayable, unframable host to the TV browser', () => {
+    const title = channel({ url: 'http://host/embed/1' });
+    vi.spyOn(PlaylistService, 'getByIndex').mockReturnValue(title);
+    vi.spyOn(w3uModel, 'classifyStation').mockReturnValue('resolvable');
+    const resolve = vi.spyOn(embedResolver, 'resolveEmbedStream');
+    const external = vi.spyOn(browserLaunch, 'openInBrowser').mockResolvedValue(true);
+    HostCapabilityService.recordResolve(title.url, { ok: false, reason: 'no_metadata' });
+    HostCapabilityService.setFramable(title.url, false);
+
+    app.playChannel(4);
+
+    expect(resolve).not.toHaveBeenCalled();
+    expect(external).toHaveBeenCalledWith('http://host/embed/1');
+    expect(app.browser.open).not.toHaveBeenCalled();
+  });
+
+  it('leaves a Live host unknown after a network failure', async () => {
+    const title = channel({ url: 'http://host/embed/1' });
+    vi.spyOn(PlaylistService, 'getByIndex').mockReturnValue(title);
+    vi.spyOn(w3uModel, 'classifyStation').mockReturnValue('resolvable');
+    vi.spyOn(embedResolver, 'resolveEmbedStream')
+      .mockResolvedValue({ ok: false, reason: 'unavailable' });
+
+    app.playChannel(4);
+    await vi.waitFor(() => expect(app.browser.open).toHaveBeenCalledOnce());
+
+    expect(HostCapabilityService.getPlayable(title.url)).toBe('unknown');
   });
 
   it('still plays a direct-media Live channel', () => {

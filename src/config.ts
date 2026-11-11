@@ -174,6 +174,14 @@ export const CONFIG = {
     // Hosts whose own `data-options` payload may be trusted over generic
     // markup, with the same host/subdomain matching.
     RESOLVABLE_EMBED_HOSTS: ['ok.ru'],
+    // Probed page hosts that answer with X-Frame-Options: DENY (or a matching
+    // frame-ancestors policy), so no in-app Browser frame can ever show them.
+    FRAME_BLOCKED_HOSTS: ['luluvid.com', 'vidnest.live', 'vidnest.io'],
+    // Learned host facts expire so a host that was fixed is retried.
+    CAPABILITY_PLAYABLE_TTL_MS: 7 * 24 * 60 * 60 * 1000,
+    CAPABILITY_FRAMABLE_TTL_MS: 30 * 24 * 60 * 60 * 1000,
+    CAPABILITY_STORAGE_VERSION: 1,
+    CAPABILITY_MAX_HOSTS: 200,
     SYNOPSIS_MAX_CHARS: 1200,
     GENRES_MAX: 4,
     // Total titles the pinned linked-list overlay may add to Live. Each linked

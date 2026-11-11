@@ -39,16 +39,40 @@ function logFailure(reason: string, code: string): void {
   );
 }
 
+// Chromium 53 has no navigation-result promise, so a returned window is the
+// only signal that the tab was allowed.
+function openInTab(target: string): Promise<boolean> {
+  try {
+    // `noopener` makes window.open return null in current browsers, which is
+    // indistinguishable from a blocked popup; null the opener instead.
+    const opened = window.open(target, '_blank');
+    if (!opened) {
+      logFailure('popup-blocked', 'none');
+      return Promise.resolve(false);
+    }
+    try {
+      opened.opener = null;
+    } catch {
+      // A cross-origin handle may refuse; the tab is already open.
+    }
+    return Promise.resolve(true);
+  } catch {
+    logFailure('exception', 'unknown');
+    return Promise.resolve(false);
+  }
+}
+
 // Fire-and-forget: the app may be suspended while the browser is foregrounded,
 // so only the launch request outcome is reported.
 export function openInBrowser(url: string): Promise<boolean> {
-  if (!isWebOS()) return Promise.resolve(false);
-
   const target = absoluteHttpUrl(url);
   if (!target) {
     logFailure('invalid-url', 'none');
     return Promise.resolve(false);
   }
+
+  // The desktop preview has no TV browser to launch: use a real tab.
+  if (!isWebOS()) return openInTab(target);
 
   return new Promise((resolve) => {
     try {

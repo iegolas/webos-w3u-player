@@ -303,6 +303,53 @@ describe('i18n', () => {
     expect(t('w3u.openInApp')).toBe('Open in app browser');
   });
 
+  it('explains a disabled Library action in every locale, naming the actions as they are labeled', () => {
+    try {
+      for (const { value } of localeOptions()) {
+        setLocale(value);
+        const where = `locale ${value}`;
+        const app = t('w3u.openInApp');
+        const tv = t('w3u.openInBrowser');
+        const play = t('w3u.playUnavailable', { app, tv });
+        expect(play, where).toContain(app);
+        expect(play, where).toContain(tv);
+        for (const text of [
+          play,
+          t('w3u.appUnavailable', { tv }),
+          t('w3u.inAppUnavailable', { tv }),
+          t('browser.failedBlocked', { tv }),
+        ]) {
+          expect(text, where).not.toMatch(/\{\w+\}/);
+        }
+        expect(t('w3u.appUnavailable', { tv }), where).toContain(tv);
+        expect(t('w3u.inAppUnavailable', { tv }), where).toContain(tv);
+        expect(t('browser.failedBlocked', { tv }), where).toContain(tv);
+      }
+    } finally {
+      setLocale(DEFAULT_LOCALE);
+    }
+    expect(t('w3u.playUnavailable', { app: 'A', tv: 'B' })).toBe("This site can't play inside the app. Try A or B.");
+  });
+
+  it('localizes the item URL debug aid in every locale, with the same keys everywhere', () => {
+    const keys = [
+      'settings.advancedGroupDebug', 'settings.showItemUrl', 'settings.showItemUrlHint',
+      'w3u.debugUrlLabel', 'w3u.debugScanHint', 'w3u.debugQrTooLong',
+    ] as const;
+    try {
+      for (const { value } of localeOptions()) {
+        setLocale(value);
+        for (const key of keys) expect(t(key).trim(), `${value} ${key}`).not.toBe('');
+      }
+      setLocale('de');
+      expect(t('w3u.debugScanHint')).toBe('Zum Öffnen auf dem Handy scannen');
+    } finally {
+      setLocale(DEFAULT_LOCALE);
+    }
+    expect(t('settings.showItemUrl')).toBe('Show item URL and QR code');
+    expect(t('w3u.debugScanHint')).toBe('Scan to open on your phone');
+  });
+
   it('localizes live preview settings and remaining minutes in every locale', () => {
     try {
       for (const { value } of localeOptions()) {

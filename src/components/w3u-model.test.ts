@@ -120,10 +120,10 @@ describe('classifyStation', () => {
     expect(classifyStation(off, hosts, browserOnly)).toBe('direct');
   });
 
-  it('tries embed hosts and their subdomains, and leaves other hosts media', () => {
+  it('tries embed hosts and their subdomains, and other hosts through the resolver too', () => {
     expect(classifyStation(channel('c', { url: 'http://embed.test/x' }), hosts, browserOnly)).toBe('resolvable');
     expect(classifyStation(channel('c', { url: 'http://cdn.embed.test/x' }), hosts, browserOnly)).toBe('resolvable');
-    expect(classifyStation(channel('c', { url: 'http://notembed.test/x' }), hosts, browserOnly)).toBe('direct');
+    expect(classifyStation(channel('c', { url: 'http://notembed.test/x' }), hosts, browserOnly)).toBe('resolvable');
   });
 
   it('recognizes embed page paths on a generic host', () => {
@@ -131,8 +131,20 @@ describe('classifyStation', () => {
       .toBe('resolvable');
   });
 
-  it('tries an unknown URL as media', () => {
-    expect(classifyStation(channel('c', { url: 'http://host/stream/17' }), hosts, browserOnly)).toBe('direct');
+  it('tries an extensionless page on an unknown host through the resolver', () => {
+    expect(classifyStation(channel('c', { url: 'http://page.test/d/1' }), hosts, browserOnly)).toBe('resolvable');
+    expect(classifyStation(channel('c', { url: 'http://page.test/watch' }), hosts, browserOnly)).toBe('resolvable');
+  });
+
+  it('plays a media file on an unknown host directly', () => {
+    expect(classifyStation(channel('c', { url: 'http://page.test/live/a.m3u8' }), hosts, browserOnly))
+      .toBe('direct');
+    expect(classifyStation(channel('c', { url: 'http://page.test/a.mp4' }), hosts, browserOnly)).toBe('direct');
+  });
+
+  it('leaves a station without a URL on the direct path', () => {
+    expect(classifyStation(channel('c', { url: '' }), hosts, browserOnly)).toBe('direct');
+    expect(classifyStation(channel('c', { url: '  ' }), hosts, browserOnly)).toBe('direct');
   });
 
   describe('browser-only hosts', () => {
@@ -158,11 +170,13 @@ describe('classifyStation', () => {
         .toBe('browser');
     });
 
-    it('leaves a media file on a browser-only host direct', () => {
+    it('leaves a media file on a browser-only host direct, and sends its pages to the browser', () => {
       expect(classifyStation(channel('c', { url: 'http://solo.test/a.mp4' }), hosts, browserOnly))
         .toBe('direct');
       expect(classifyStation(channel('c', { url: 'http://solo.test/stream/17' }), hosts, browserOnly))
-        .toBe('direct');
+        .toBe('browser');
+      expect(classifyStation(channel('c', { url: 'http://solo.test/d/1' }), hosts, browserOnly))
+        .toBe('browser');
     });
   });
 });

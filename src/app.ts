@@ -32,6 +32,7 @@ import { W3uView } from './components/w3u-view';
 import { InAppBrowser } from './components/in-app-browser';
 import { classifyStation, hasW3uLibrary } from './components/w3u-model';
 import { resolveEmbedStream } from './services/embed-resolver';
+import { HostCapabilityService } from './services/host-capability';
 import { Search } from './components/search';
 import { SearchHistoryDropdown } from './components/search-history-dropdown';
 import { showToast } from './components/toast';
@@ -1603,8 +1604,10 @@ export class App {
     // This activation supersedes a resolve still running for another channel.
     if (this.resolveChannel === channel) return;
     this.abortResolve();
-    if (kind === 'browser') {
-      this.openInAppBrowser(channel.url, 'channels');
+    // A browser-only page, or a host already proven unplayable, skips a resolve
+    // that would only burn its timeout.
+    if (kind === 'browser' || HostCapabilityService.getPlayable(channel.url) === false) {
+      this.openPageToPlay(channel.url);
       return;
     }
     const controller = new AbortController();
@@ -1615,17 +1618,28 @@ export class App {
         if (this.w3uResolve === controller) this.w3uResolve = null;
         if (this.resolveChannel === channel) this.resolveChannel = null;
         if (controller.signal.aborted) return;
-        const still = PlaylistService.getByIndex(index) === channel;
-        if (result.ok && still) {
-          this.player.play(index, catchup, scope, false, {
-            url: result.url,
-            headers: result.headers,
-          });
-          return;
+        if (result.ok) {
+          HostCapabilityService.recordResolve(channel.url, { ok: true });
+          if (PlaylistService.getByIndex(index) === channel) {
+            this.player.play(index, catchup, scope, false, {
+              url: result.url,
+              headers: result.headers,
+            });
+            return;
+          }
+        } else {
+          if (result.reason === 'aborted') return;
+          HostCapabilityService.recordResolve(channel.url, result);
         }
-        if (!result.ok && result.reason === 'aborted') return;
-        this.openInAppBrowser(channel.url, 'channels');
+        this.openPageToPlay(channel.url);
       });
+  }
+
+  // A page with no playable stream goes in the in-app Browser, unless its host
+  // refuses frames; only then does the TV browser open by itself.
+  private openPageToPlay(url: string): void {
+    if (HostCapabilityService.getFramable(url) === false) this.openStationInBrowser(url);
+    else this.openInAppBrowser(url, 'channels');
   }
 
   private abortResolve(): void {
@@ -1654,6 +1668,12 @@ export class App {
       else this.startDetachedW3uChannel(channel);
       return;
     }
+    // Library Play never leaves the app: a host already proven unplayable is
+    // refused up front, and a failed resolve reports in place.
+    if (HostCapabilityService.getPlayable(channel.url) === false) {
+      showToast(t('player.unableToPlay'));
+      return;
+    }
     this.w3uResolve?.abort();
     const controller = new AbortController();
     this.w3uResolve = controller;
@@ -1663,6 +1683,7 @@ export class App {
         // A Back out of the Library abandons the attempt, whatever it returns.
         if (controller.signal.aborted) return;
         if (result.ok) {
+          HostCapabilityService.recordResolve(channel.url, { ok: true });
           const source = { url: result.url, headers: result.headers };
           // A playlist refresh while resolving may have renumbered the list.
           const current = PlaylistService.indexOf(channel);
@@ -1672,7 +1693,8 @@ export class App {
           return;
         }
         if (result.reason === 'aborted') return;
-        this.openStationInBrowser(channel.url);
+        HostCapabilityService.recordResolve(channel.url, result);
+        showToast(t('player.unableToPlay'));
       });
   }
 

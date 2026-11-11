@@ -154,15 +154,19 @@ function isEmbedPage(channel: Channel, embedHosts: readonly string[]): boolean {
 
 // W3U adds its own signals to the shared URL classifier: an explicit embed
 // flag, Wiseplay's "host page" flag, and the hosts known to serve player
-// pages. A URL nobody recognizes is tried as media; the player reports a
-// failure if it is not. A player page is 'resolvable' unless its host needs
-// its own player, since that attempt would only burn the resolve timeout.
+// pages. A media file plays at once. Every other URL is a page: an
+// extensionless address on an unknown host is a player page far more often
+// than a raw stream, so Play tries the resolver, and the capability store
+// turns the first failure into a disabled Play instead of a repeated wait.
+// A page whose host needs its own player goes to the TV browser instead,
+// since a resolve there would only burn the timeout.
 export function classifyStation(
   channel: Channel,
   embedHosts: readonly string[] = CONFIG.W3U.EMBED_HOSTS,
   browserOnlyHosts: readonly string[] = CONFIG.W3U.BROWSER_ONLY_HOSTS,
 ): StationKind {
-  if (!isEmbedPage(channel, embedHosts)) return 'direct';
+  if (!channel.url.trim()) return 'direct';
+  if (!isEmbedPage(channel, embedHosts) && classifyStreamUrl(channel.url) === 'media') return 'direct';
   return hostMatches(hostOf(channel.url), browserOnlyHosts) ? 'browser' : 'resolvable';
 }
 

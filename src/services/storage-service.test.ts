@@ -211,6 +211,23 @@ describe('StorageService', () => {
     });
   });
 
+  it('defaults the item URL debug aid to off, persists it, and ignores malformed values', () => {
+    expect(StorageService.getShowItemUrl()).toBe(false);
+    expect(localStorage.getItem('iptv_show_item_url')).toBeNull();
+    StorageService.setShowItemUrl(true);
+    expect(localStorage.getItem('iptv_show_item_url')).toBe('true');
+    expect(StorageService.getShowItemUrl()).toBe(true);
+    StorageService.setShowItemUrl(false);
+    expect(StorageService.getShowItemUrl()).toBe(false);
+    for (const value of ['null', '"true"', '1', 'invalid']) {
+      localStorage.setItem('iptv_show_item_url', value);
+      expect(StorageService.getShowItemUrl()).toBe(false);
+    }
+    localStorage.setItem('iptv_show_item_url', 'true');
+    StorageService.clearAll();
+    expect(StorageService.getShowItemUrl()).toBe(false);
+  });
+
   it('defaults live preview to off without writing a preference', () => {
     expect(StorageService.getLivePreview()).toBe(false);
     expect(localStorage.getItem('iptv_live_preview')).toBeNull();

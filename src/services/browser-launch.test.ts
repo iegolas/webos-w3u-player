@@ -46,9 +46,11 @@ function warnText(warn: ReturnType<typeof vi.spyOn>): string {
 }
 
 let warn: ReturnType<typeof vi.spyOn>;
+let open: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+  open = vi.spyOn(window, 'open').mockReturnValue(window);
 });
 
 afterEach(() => {
@@ -58,6 +60,7 @@ afterEach(() => {
     value: ORIGINAL_UA,
   });
   warn.mockRestore();
+  open.mockRestore();
 });
 
 describe('openInBrowser', () => {
@@ -76,6 +79,7 @@ describe('openInBrowser', () => {
       id: 'com.webos.app.browser',
       params: { target: 'https://host/a' },
     });
+    expect(open).not.toHaveBeenCalled();
     expect(warn).not.toHaveBeenCalled();
   });
 
@@ -148,12 +152,47 @@ describe('openInBrowser', () => {
     expect(warnText(warn)).toContain('reason=invalid-url');
   });
 
-  it('returns false off webOS without calling Luna', async () => {
-    const bridge = installBridge();
+  it('opens a new tab off webOS with the normalized URL', async () => {
+    await expect(openInBrowser('  host/a?x=1  ')).resolves.toBe(true);
+
+    expect(open).toHaveBeenCalledTimes(1);
+    // No `noopener` feature: it makes window.open return null even when the
+    // tab opens, which would be indistinguishable from a blocked popup.
+    expect(open).toHaveBeenCalledWith('https://host/a?x=1', '_blank');
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('resolves false and logs once when the popup is blocked', async () => {
+    open.mockReturnValue(null);
 
     await expect(openInBrowser('http://host/a')).resolves.toBe(false);
 
-    expect(bridge.calls).toHaveLength(0);
-    expect(warn).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const text = warnText(warn);
+    expect(text).toContain('event=browser.launch.failed');
+    expect(text).toContain('reason=popup-blocked');
+    expect(text).not.toContain('http://host/a');
+  });
+
+  it('resolves false when opening the tab throws', async () => {
+    open.mockImplementation(() => {
+      throw new Error('no-window');
+    });
+
+    await expect(openInBrowser('http://host/a')).resolves.toBe(false);
+
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warnText(warn)).toContain('reason=exception');
+    expect(warnText(warn)).not.toContain('http://host/a');
+  });
+
+  it('rejects invalid input off webOS without opening a tab', async () => {
+    await expect(openInBrowser('ftp://host/a')).resolves.toBe(false);
+    await expect(openInBrowser('   ')).resolves.toBe(false);
+
+    expect(open).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warnText(warn)).toContain('reason=invalid-url');
   });
 });

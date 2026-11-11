@@ -85,6 +85,18 @@ export interface ChannelHealthRecord {
   error?: string;
 }
 
+/** A learned host fact: proven once observed, 'unknown' until then or after it expires. */
+export type HostCapabilityState = boolean | 'unknown';
+
+/** Why a station cannot play in the app; `unknown` when nothing has been learned. */
+export type HostCapabilityReason = 'frame_blocked' | 'not_resolvable' | 'unknown';
+
+export interface HostCapability {
+  host: string;
+  playableInApp: HostCapabilityState;
+  framable: HostCapabilityState;
+}
+
 /** One playlist tab. `id` is the configured playlist's stable id (so two
  *  playlists sharing a name stay distinct); `name` is the display label. */
 export interface PlaylistTab {

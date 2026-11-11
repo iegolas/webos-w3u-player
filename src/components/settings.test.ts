@@ -33,6 +33,7 @@ const {
     manualEpgSources: [] as ManualEpgSource[],
     autoPlay: false,
     livePreview: false,
+    showItemUrl: false,
     animationMode: 'reduced' as AnimationMode,
     theme: 'midnight' as string,
     overlayStyle: 'dark' as string,
@@ -89,6 +90,8 @@ const {
       }))),
       getAutoPlay: vi.fn(() => state.autoPlay),
       getLivePreview: vi.fn(() => state.livePreview),
+      getShowItemUrl: vi.fn(() => state.showItemUrl),
+      setShowItemUrl: vi.fn((v: boolean) => { state.showItemUrl = v; }),
       getAnimationMode: vi.fn(() => state.animationMode),
       getTheme: vi.fn(() => state.theme),
       getOverlayStyle: vi.fn(() => state.overlayStyle),
@@ -261,6 +264,7 @@ beforeEach(() => {
   state.manualEpgSources = [];
   state.autoPlay = false;
   state.livePreview = false;
+  state.showItemUrl = false;
   state.animationMode = 'reduced';
   state.theme = 'midnight';
   state.overlayStyle = 'dark';
@@ -563,11 +567,11 @@ describe('Settings.render', () => {
     const advanced = container.querySelector('#settings-advanced')!;
     expect(advanced.querySelector('.settings-section-title')?.textContent).toBe('Advanced');
     const items = advanced.querySelectorAll('.settings-advanced-row');
-    expect(items).toHaveLength(7);
+    expect(items).toHaveLength(8);
     expect(Array.from(advanced.querySelectorAll('.settings-advanced-group'))
       .map(group => group.textContent?.trim())
       .filter(Boolean))
-      .toEqual(['Interface', 'Playback', 'On-screen display', 'Background refresh']);
+      .toEqual(['Interface', 'Playback', 'On-screen display', 'Background refresh', 'Debug']);
     expect(items[0].querySelector('.settings-item-title')?.textContent)
       .toBe('Animation mode');
     expect(items[0].querySelector('.settings-advanced-control')?.children)
@@ -636,7 +640,7 @@ describe('Settings.render', () => {
     settings.render();
 
     expect(container.querySelectorAll('#settings-advanced .settings-advanced-row'))
-      .toHaveLength(8);
+      .toHaveLength(9);
     expect(container.querySelector('#xtream-catalog-refresh-interval')
       ?.getAttribute('data-value')).toBe('6');
     expect(Array.from(container.querySelectorAll<HTMLElement>(
@@ -1590,6 +1594,33 @@ describe('Settings.save', () => {
     settings.render();
     expect(container.querySelector('#live-preview-setting .toggle-option.active')?.getAttribute('data-value'))
       .toBe(enabled ? 'on' : 'off');
+  });
+
+  it('puts the item URL debug aid under Advanced > Debug, off by default', () => {
+    const control = container.querySelector('#show-item-url')!;
+    const row = control.closest('.settings-advanced-row')!;
+    expect(row.closest('[data-settings-category]')?.getAttribute('data-settings-category')).toBe('advanced');
+    expect(row.querySelector('.settings-advanced-group')?.textContent?.trim()).toBe('Debug');
+    expect(row.querySelector('.settings-item-title')?.textContent).toBe('Show item URL and QR code');
+    expect(control.querySelector('.toggle-option.active')?.getAttribute('data-value')).toBe('off');
+    expect(storageMock.setShowItemUrl).not.toHaveBeenCalled();
+  });
+
+  it.each([false, true])('saves the item URL debug aid from %s only on Save', (enabled) => {
+    state.showItemUrl = enabled;
+    settings.render();
+    click(`#show-item-url [data-value="${enabled ? 'off' : 'on'}"]`);
+    expect(storageMock.setShowItemUrl).not.toHaveBeenCalled();
+    click('#save-settings');
+    expect(storageMock.setShowItemUrl).toHaveBeenCalledExactlyOnceWith(!enabled);
+    expect(state.showItemUrl).toBe(!enabled);
+  });
+
+  it('discards an unsaved item URL debug change on Cancel', () => {
+    click('#show-item-url [data-value="on"]');
+    click('#cancel-settings');
+    expect(storageMock.setShowItemUrl).not.toHaveBeenCalled();
+    expect(state.showItemUrl).toBe(false);
   });
 
   it('persists trimmed playlists, EPG and auto-play, then reloads', () => {

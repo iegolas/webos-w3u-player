@@ -7,6 +7,7 @@ import { focusWithoutScroll, html, raw, type Safe } from '../utils/dom';
 import { morph } from '../utils/morph';
 import { createLogger } from '../utils/logger';
 import { t } from '../i18n';
+import { HostCapabilityService } from '../services/host-capability';
 
 const log = createLogger('InAppBrowser');
 
@@ -285,6 +286,8 @@ export class InAppBrowser {
     this.phase = 'failed';
     this.failReason = reason;
     log.warn('Page did not load', 'event=browser.frame.failed', `reason=${reason}`);
+    // A timeout says the site did not show; being offline says nothing about it.
+    if (reason === 'timeout') HostCapabilityService.setFramable(this.target.src, false);
     this.render();
   }
 
@@ -351,9 +354,9 @@ export class InAppBrowser {
 
   // --- rendering ---
 
-  private button(key: string, icon: string, label: string): Safe {
+  private button(key: string, icon: string, label: string, primary = false): Safe {
     return html`
-      <button class="ab-btn" type="button" data-focusable data-key="${key}">
+      <button class="ab-btn${primary ? ' ab-btn-primary' : ''}" type="button" data-focusable data-key="${key}">
         <span class="ab-btn-icon">${raw(icon)}</span><span>${label}</span>
       </button>`;
   }
@@ -387,8 +390,10 @@ export class InAppBrowser {
               <div class="ab-overlay">
                 <div class="ab-card" role="alert" data-reason="${this.failReason ?? 'timeout'}">
                   <h2 class="ab-card-title">${t('browser.failedTitle')}</h2>
-                  <p class="ab-card-hint">${t('browser.failedHint')}</p>
-                  ${this.button(FAILED_TV_KEY, EXTERNAL_ICON, t('w3u.openInBrowser'))}
+                  <p class="ab-card-hint">${this.failReason === 'timeout'
+                    ? t('browser.failedBlocked', { tv: t('w3u.openInBrowser') })
+                    : t('browser.failedHint')}</p>
+                  ${this.button(FAILED_TV_KEY, EXTERNAL_ICON, t('w3u.openInBrowser'), true)}
                 </div>
               </div>` : ''}
           </div>

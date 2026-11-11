@@ -1140,6 +1140,14 @@ export const StorageService = {
     set('live_preview', val);
   },
 
+  // Debug aid: the Library detail shows the title's address and a QR of it.
+  getShowItemUrl(): boolean {
+    return get<unknown>('show_item_url', false) === true;
+  },
+  setShowItemUrl(val: boolean): void {
+    set('show_item_url', val);
+  },
+
   getAnimationMode(): AnimationMode {
     const mode = get<unknown>('animation_mode', DEFAULT_ANIMATION_MODE);
     return isAnimationMode(mode) ? mode : DEFAULT_ANIMATION_MODE;
