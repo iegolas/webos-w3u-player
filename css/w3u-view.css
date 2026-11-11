@@ -173,3 +173,13 @@
   color: var(--text-muted);
 }
 .w3u-detail .detail-btn-icon.w3u-glyph { width: 28px; height: 28px; }
+
+/* Play on a title that still has to be looked up: the icon becomes a spinner
+   (the shared `spin` keyframes) and the label says it is starting. */
+.w3u-busy .detail-btn-icon {
+  box-sizing: border-box;
+  border: 3px solid rgba(255, 255, 255, 0.35);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}

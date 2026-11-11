@@ -46,14 +46,19 @@ export interface W3uHandlers {
   onRevealTabBar: () => void;
   // Back from the group list leaves the Library.
   onBack: () => void;
-  // A station whose URL is media: the host plays it.
-  onPlay: (channel: Channel) => void;
+  // A station the app plays itself. A resolvable embed takes a moment to
+  // start: the host returns a promise that settles once it has started the
+  // player, fallen back to the browser, or been canceled.
+  onPlay: (channel: Channel) => Promise<unknown> | void;
+  // Back out of a title that is still starting: the host drops the attempt.
+  onCancelPlay: () => void;
   // A station that only plays on its own web page: the host opens the TV browser.
   onOpenInBrowser: (station: W3uStation) => void;
 }
 
 // The W3U Library: a group list beside a poster grid of that group's titles,
-// and a detail screen with a Play / Open in TV browser action. One focus scope
+// and a detail screen with a Play / Open in TV browser action. Play on a
+// resolvable embed shows "Starting…" on the button until the host settles. One focus scope
 // holds the focused group row, poster, or button; keys are plain indexes
 // (`g:2`, `t:15`, `d:action`) because only the active group's grid exists.
 // Back walks detail -> grid -> group list -> Live. Both layers stay in the DOM
@@ -67,6 +72,9 @@ export class W3uView {
   private gridFocus = 0;
   private detail: W3uStation | null = null;
   private detailReturn = 0;
+  // The station whose Play is still starting, and the attempt it belongs to.
+  private starting: W3uStation | null = null;
+  private startAttempt = 0;
   private readonly layers: Record<Mode, HTMLElement>;
   private readonly gridVirtualizer = new VirtualGrid({
     columnStride: GRID_COLUMN_STRIDE,
@@ -129,6 +137,7 @@ export class W3uView {
       this.groupIndex = 0;
       this.gridFocus = 0;
       this.detail = null;
+      this.cancelStart();
       this.gridVirtualizer.setScrollOffset(0);
       this.groupVirtualizer.setScrollOffset(0);
       morph(this.layers.detail, html``);
@@ -348,6 +357,7 @@ export class W3uView {
   }
 
   private closeDetail(): void {
+    this.cancelStart();
     this.detail = null;
     this.showLayer('library');
     morph(this.layers.detail, html``);
@@ -356,9 +366,30 @@ export class W3uView {
 
   private activate(): void {
     const station = this.detail;
-    if (!station) return;
-    if (station.kind === 'embed') this.handlers.onOpenInBrowser(station);
-    else this.handlers.onPlay(station.channel);
+    if (!station || this.starting) return;
+    if (station.kind === 'browser') {
+      this.handlers.onOpenInBrowser(station);
+      return;
+    }
+    const started = this.handlers.onPlay(station.channel);
+    if (station.kind !== 'resolvable' || !started) return;
+    const attempt = ++this.startAttempt;
+    this.starting = station;
+    this.renderDetail();
+    const settled = (): void => {
+      if (attempt !== this.startAttempt || this.starting !== station) return;
+      this.starting = null;
+      if (this.mode === 'detail') this.renderDetail();
+    };
+    started.then(settled, settled);
+  }
+
+  // Drops a start still in flight, so a late result cannot touch the next one.
+  private cancelStart(): void {
+    if (!this.starting) return;
+    this.starting = null;
+    this.startAttempt++;
+    this.handlers.onCancelPlay();
   }
 
   // --- rendering ---
@@ -496,7 +527,7 @@ export class W3uView {
   }
 
   private tile(station: W3uStation, index: number): Safe {
-    const embed = station.kind === 'embed';
+    const embed = station.kind === 'browser';
     return html`
       <div class="catalog-tile w3u-tile${embed ? ' w3u-tile-embed' : ''}" data-focusable data-key="t:${index}">
         <div class="catalog-poster-wrap">${this.posterCell(station.name, station.poster)}${embed ? html`
@@ -510,7 +541,8 @@ export class W3uView {
   private renderDetail(): void {
     const station = this.detail;
     if (!station) return;
-    const embed = station.kind === 'embed';
+    const embed = station.kind === 'browser';
+    const busy = this.starting === station;
     morph(this.layers.detail, html`
       <div class="catalog-view movies-detail w3u-detail" data-nav-container>
         <div class="detail-poster-wrap">${this.posterCell(station.name, station.poster)}</div>
@@ -522,9 +554,10 @@ export class W3uView {
             <div class="w3u-note"><span class="w3u-glyph">${raw(GLOBE_ICON)}</span><span>${t('w3u.browserNote')}</span></div>
           ` : ''}
           <div class="detail-actions">
-            <button class="detail-btn detail-btn-primary" type="button" data-focusable data-key="${DETAIL_KEY}">
-              <span class="detail-btn-icon${embed ? ' w3u-glyph' : ''}">${raw(embed ? GLOBE_ICON : PLAY_ICON)}</span>
-              <span>${t(embed ? 'w3u.openInBrowser' : 'catalog.play')}</span>
+            <button class="detail-btn detail-btn-primary${busy ? ' w3u-busy' : ''}" type="button"
+                    data-focusable data-key="${DETAIL_KEY}" aria-busy="${busy ? 'true' : 'false'}">
+              <span class="detail-btn-icon${embed ? ' w3u-glyph' : ''}">${busy ? '' : raw(embed ? GLOBE_ICON : PLAY_ICON)}</span>
+              <span>${t(busy ? 'w3u.starting' : embed ? 'w3u.openInBrowser' : 'catalog.play')}</span>
             </button>
           </div>
         </div>

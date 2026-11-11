@@ -30,7 +30,7 @@ import { Movies } from './components/movies';
 import { Series } from './components/series';
 import { W3uView } from './components/w3u-view';
 import { classifyStation, hasW3uLibrary } from './components/w3u-model';
-import { isResolvableEmbedHost, resolveEmbedStream } from './services/embed-resolver';
+import { resolveEmbedStream } from './services/embed-resolver';
 import { Search } from './components/search';
 import { SearchHistoryDropdown } from './components/search-history-dropdown';
 import { showToast } from './components/toast';
@@ -315,12 +315,8 @@ class App {
       onRevealTabBar: () => this.leaveUp(),
       onBack: () => this.goLive(),
       onPlay: (channel) => this.playW3uChannel(channel),
-      onOpenInBrowser: (station) => {
-        // A host this resolver knows is attempted here first; the detail copy
-        // still says "Open in TV browser" until the Library lane updates it.
-        if (isResolvableEmbedHost(station.channel.url)) this.playW3uChannel(station.channel);
-        else this.openStationInBrowser(station.channel.url);
-      },
+      onCancelPlay: () => this.w3uResolve?.abort(),
+      onOpenInBrowser: (station) => this.openStationInBrowser(station.channel.url),
     });
     this.search = new Search(this.views.search, {
       onRevealTabBar: () => this.leaveUp(),
@@ -1496,19 +1492,19 @@ class App {
 
   // A W3U station's Play: a resolvable embed page is read through the bundled
   // service and the stream it advertises plays as a live channel. Anything
-  // else keeps the old paths: direct media plays, other embeds open in the TV
-  // browser.
-  private playW3uChannel(channel: Channel): void {
+  // else keeps the old paths: direct media plays at once. The promise settles
+  // when a resolve ends, so the Library can show the title as starting.
+  private playW3uChannel(channel: Channel): Promise<void> | void {
     const index = PlaylistService.indexOf(channel);
     if (index < 0) return;
-    if (classifyStation(channel) !== 'embed' || !isResolvableEmbedHost(channel.url)) {
+    if (classifyStation(channel) !== 'resolvable') {
       this.startW3uChannel(index);
       return;
     }
     this.w3uResolve?.abort();
     const controller = new AbortController();
     this.w3uResolve = controller;
-    void resolveEmbedStream(channel.url, channelHttpHeaders(channel), { signal: controller.signal })
+    return resolveEmbedStream(channel.url, channelHttpHeaders(channel), { signal: controller.signal })
       .then((result) => {
         if (this.w3uResolve === controller) this.w3uResolve = null;
         // A Back out of the Library abandons the attempt, whatever it returns.

@@ -1,4 +1,5 @@
-import { describe, it, expect } from 'vitest';
+import { afterEach, describe, it, expect } from 'vitest';
+import { CONFIG } from '../config';
 import type { Channel } from '../types';
 import { UNCATEGORIZED_GROUP } from '../types';
 import {
@@ -9,6 +10,9 @@ import {
   isW3uChannel,
   parseStationInfo,
 } from './w3u-model';
+
+const HOSTS = CONFIG.W3U.RESOLVABLE_EMBED_HOSTS as string[];
+const ORIGINAL_HOSTS = HOSTS.slice();
 
 function channel(name: string, patch: Partial<Channel> = {}): Channel {
   return {
@@ -90,34 +94,85 @@ describe('classifyStation', () => {
 
   it('treats a host page flag as embed unless the URL is a media file', () => {
     const page = w3u('c', { 'w3u-isHost': 'true' }, { url: 'http://host/page' });
-    expect(classifyStation(page, hosts)).toBe('embed');
+    expect(classifyStation(page, hosts)).toBe('browser');
     const media = w3u('c', { 'w3u-isHost': 'true' }, { url: 'http://host/a.mp4' });
     expect(classifyStation(media, hosts)).toBe('direct');
   });
 
   it('honors an explicit embed flag over a media-looking URL', () => {
     const flagged = w3u('c', { 'w3u-embed': 'true' }, { url: 'http://host/a.mp4' });
-    expect(classifyStation(flagged, hosts)).toBe('embed');
+    expect(classifyStation(flagged, hosts)).toBe('browser');
     const off = w3u('c', { 'w3u-embed': 'false' }, { url: 'http://host/a.mp4' });
     expect(classifyStation(off, hosts)).toBe('direct');
   });
 
   it('knows embed hosts and their subdomains', () => {
-    expect(classifyStation(channel('c', { url: 'http://embed.test/x' }), hosts)).toBe('embed');
-    expect(classifyStation(channel('c', { url: 'http://cdn.embed.test/x' }), hosts)).toBe('embed');
+    expect(classifyStation(channel('c', { url: 'http://embed.test/x' }), hosts)).toBe('browser');
+    expect(classifyStation(channel('c', { url: 'http://cdn.embed.test/x' }), hosts)).toBe('browser');
     expect(classifyStation(channel('c', { url: 'http://notembed.test/x' }), hosts)).toBe('direct');
   });
 
   it('recognizes embed page paths', () => {
-    expect(classifyStation(channel('c', { url: 'http://host/videoembed/123' }), hosts)).toBe('embed');
+    expect(classifyStation(channel('c', { url: 'http://host/videoembed/123' }), hosts)).toBe('browser');
   });
 
   it('tries an unknown URL as media', () => {
     expect(classifyStation(channel('c', { url: 'http://host/stream/17' }), hosts)).toBe('direct');
   });
+
+  describe('resolvable embeds', () => {
+    const resolvable = ['page.test'];
+
+    it('marks an embed page on a resolvable host, subdomains included', () => {
+      expect(classifyStation(channel('c', { url: 'http://page.test/videoembed/1' }), hosts, resolvable))
+        .toBe('resolvable');
+      expect(classifyStation(channel('c', { url: 'http://cdn.page.test/videoembed/1' }), hosts, resolvable))
+        .toBe('resolvable');
+    });
+
+    it('takes the host from the list it is given, not from a fixed name', () => {
+      const page = channel('c', { url: 'http://page.test/videoembed/1' });
+      expect(classifyStation(page, hosts, [])).toBe('browser');
+      expect(classifyStation(page, hosts, ['other.test'])).toBe('browser');
+    });
+
+    it('counts a flagged or listed page on a resolvable host', () => {
+      const flagged = w3u('c', { 'w3u-embed': 'true' }, { url: 'http://page.test/x' });
+      expect(classifyStation(flagged, hosts, resolvable)).toBe('resolvable');
+      const hostPage = w3u('c', { 'w3u-isHost': 'true' }, { url: 'http://page.test/x' });
+      expect(classifyStation(hostPage, hosts, resolvable)).toBe('resolvable');
+      expect(classifyStation(channel('c', { url: 'http://page.test/x' }), ['page.test'], resolvable))
+        .toBe('resolvable');
+    });
+
+    it('leaves a media file on a resolvable host direct', () => {
+      expect(classifyStation(channel('c', { url: 'http://page.test/a.mp4' }), hosts, resolvable)).toBe('direct');
+      expect(classifyStation(channel('c', { url: 'http://page.test/stream/17' }), hosts, resolvable))
+        .toBe('direct');
+    });
+
+    it('keeps other embed pages browser-only', () => {
+      expect(classifyStation(channel('c', { url: 'http://embed.test/x' }), hosts, resolvable)).toBe('browser');
+    });
+  });
 });
 
 describe('buildW3uLibrary', () => {
+  afterEach(() => {
+    HOSTS.length = 0;
+    ORIGINAL_HOSTS.forEach((host) => HOSTS.push(host));
+  });
+
+  it('sorts stations into direct, resolvable, and browser-only kinds', () => {
+    HOSTS.push('page.test');
+    const library = buildW3uLibrary([
+      channel('One', { url: 'http://host/a.mp4' }),
+      channel('Two', { url: 'http://page.test/videoembed/1' }),
+      w3u('Three', { 'w3u-isHost': 'true' }, { url: 'http://host/page' }),
+    ]);
+    expect(library.groups[0].stations.map((s) => s.kind)).toEqual(['direct', 'resolvable', 'browser']);
+  });
+
   it('groups stations in source order and keeps stored names untouched', () => {
     const channels = [
       w3u('One', { 'w3u-online': 'true' }, { group: 'Short\n  Films' }),
@@ -148,7 +203,7 @@ describe('buildW3uLibrary', () => {
     ]);
     const [one, two] = library.groups[0].stations;
     expect(one).toMatchObject({ genres: ['Drama'], synopsis: 'Words.', kind: 'direct' });
-    expect(two.kind).toBe('embed');
+    expect(two.kind).toBe('browser');
   });
 
   it('keeps unmarked stations of a W3U playlist and leaves other playlists out', () => {

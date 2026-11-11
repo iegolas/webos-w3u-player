@@ -583,5 +583,6 @@ export const UK_MESSAGES = {
   'w3u.browserBadge': 'Браузер',
   'w3u.openInBrowser': 'Відкрити в браузері ТВ',
   'w3u.browserNote': 'Це відео відтворюється на власному сайті. Відкрийте його в браузері ТВ, щоб переглянути.',
+  'w3u.starting': 'Запуск…',
   'w3u.browserUnavailable': "Не вдалося відкрити браузер телевізора.",
 } satisfies MessageCatalog;

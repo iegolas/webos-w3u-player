@@ -535,5 +535,6 @@ export const TR_MESSAGES = {
   'w3u.browserBadge': 'Tarayıcı',
   'w3u.openInBrowser': 'TV tarayıcısında aç',
   'w3u.browserNote': 'Bu içerik kendi web sitesinde oynatılır. İzlemek için TV tarayıcısında açın.',
+  'w3u.starting': 'Başlatılıyor…',
   'w3u.browserUnavailable': "TV tarayıcısı açılamadı.",
 } as const satisfies MessageCatalog;

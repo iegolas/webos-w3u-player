@@ -553,6 +553,7 @@ export const EN_MESSAGES = {
   'w3u.browserBadge': 'Browser',
   'w3u.openInBrowser': 'Open in TV browser',
   'w3u.browserNote': 'This title plays on its own website. Open it in the TV browser to watch.',
+  'w3u.starting': 'Starting…',
   'w3u.browserUnavailable': "Could not open the TV browser.",
 } as const;
 

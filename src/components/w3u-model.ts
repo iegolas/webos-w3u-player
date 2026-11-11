@@ -3,13 +3,15 @@ import { UNCATEGORIZED_GROUP } from '../types';
 import { CONFIG } from '../config';
 import { truncate } from '../utils/text';
 import { classifyStreamUrl } from '../utils/stream-url-classifier';
+import { isResolvableEmbedHost } from '../services/embed-resolver';
 
 // Display-only data for the W3U Library. Everything here derives from the
 // parsed channels; nothing is written back, so stored names stay as delivered.
 
-// 'direct': a media URL the player can load. 'embed': an HTML player page,
-// which the app cannot play in v1 and hands to the TV browser instead.
-export type StationKind = 'direct' | 'embed';
+// 'direct': a media URL the player can load now. 'resolvable': an HTML player
+// page on a host the resolver can read, so it plays after a short wait.
+// 'browser': any other player page; the app hands it to the TV browser.
+export type StationKind = 'direct' | 'resolvable' | 'browser';
 
 export interface W3uStation {
   channel: Channel;
@@ -90,24 +92,30 @@ function hostOf(url: string): string {
   }
 }
 
+function isEmbedPage(channel: Channel, embedHosts: readonly string[]): boolean {
+  const attributes = channel.sourceAttributes ?? {};
+  const embed = attributes['w3u-embed'];
+  if (embed && embed !== 'false') return true;
+  const kind = classifyStreamUrl(channel.url);
+  if (kind === 'media') return false;
+  if (kind === 'embed') return true;
+  if (attributes['w3u-isHost'] === 'true') return true;
+  const host = hostOf(channel.url);
+  return !!host && embedHosts.some((entry) => host === entry || host.endsWith(`.${entry}`));
+}
+
 // W3U adds its own signals to the shared URL classifier: an explicit embed
 // flag, Wiseplay's "host page" flag, and the hosts known to serve player
 // pages. A URL nobody recognizes is tried as media; the player reports a
-// failure if it is not.
+// failure if it is not. A player page is 'resolvable' when the resolver
+// reads its host, whichever host that is.
 export function classifyStation(
   channel: Channel,
   embedHosts: readonly string[] = CONFIG.W3U.EMBED_HOSTS,
+  resolvableHosts: readonly string[] = CONFIG.W3U.RESOLVABLE_EMBED_HOSTS,
 ): StationKind {
-  const attributes = channel.sourceAttributes ?? {};
-  const embed = attributes['w3u-embed'];
-  if (embed && embed !== 'false') return 'embed';
-  const kind = classifyStreamUrl(channel.url);
-  if (kind === 'media') return 'direct';
-  if (kind === 'embed') return 'embed';
-  if (attributes['w3u-isHost'] === 'true') return 'embed';
-  const host = hostOf(channel.url);
-  if (host && embedHosts.some((entry) => host === entry || host.endsWith(`.${entry}`))) return 'embed';
-  return 'direct';
+  if (!isEmbedPage(channel, embedHosts)) return 'direct';
+  return isResolvableEmbedHost(channel.url, resolvableHosts) ? 'resolvable' : 'browser';
 }
 
 export interface StationInfo {

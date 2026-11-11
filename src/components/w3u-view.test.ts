@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
+import { CONFIG } from '../config';
 import type { Action, Channel } from '../types';
 import { Focus } from '../navigation/focus-scope';
 import { W3uView, type W3uHandlers } from './w3u-view';
@@ -11,6 +12,14 @@ function station(name: string, group: string, patch: Partial<Channel> = {}): Cha
     catchup: '', catchupSource: '', catchupDays: 0, ...patch,
   };
 }
+
+const HOSTS = CONFIG.W3U.RESOLVABLE_EMBED_HOSTS as string[];
+const ORIGINAL_HOSTS = HOSTS.slice();
+
+const resolvableStation = (name: string, group: string): Channel => station(name, group, {
+  url: 'http://page.test/videoembed/1',
+  sourceAttributes: { 'w3u-online': 'true' },
+});
 
 const embedStation = (name: string, group: string): Channel => station(name, group, {
   url: 'http://host/page',
@@ -44,10 +53,18 @@ beforeEach(() => {
   document.documentElement.classList.remove('keyboard-nav');
   Focus.uninstall();
   Element.prototype.scrollIntoView = vi.fn();
-  handlers = { onRevealTabBar: vi.fn(), onBack: vi.fn(), onPlay: vi.fn(), onOpenInBrowser: vi.fn() };
+  HOSTS.push('page.test');
+  handlers = {
+    onRevealTabBar: vi.fn(), onBack: vi.fn(), onPlay: vi.fn(), onCancelPlay: vi.fn(), onOpenInBrowser: vi.fn(),
+  };
   container = document.createElement('div');
   document.body.innerHTML = '';
   document.body.appendChild(container);
+});
+
+afterEach(() => {
+  HOSTS.length = 0;
+  ORIGINAL_HOSTS.forEach((host) => HOSTS.push(host));
 });
 
 describe('W3uView library', () => {
@@ -73,13 +90,21 @@ describe('W3uView library', () => {
     expect(focusedKeys()).toEqual(['t:0']);
   });
 
-  it('marks only embed-only titles for the TV browser', () => {
+  it('marks only browser-only titles for the TV browser', () => {
     const view = open(channels);
     expect(container.querySelector('.w3u-badge')).toBeNull();
     pressKey(view, 'left');
     pressKey(view, 'down');
     pressKey(view, 'select');
     expect(container.querySelector('.w3u-tile-embed .w3u-badge')?.textContent).toContain('Browser');
+  });
+
+  it('shows no badge on a title that plays after a short lookup', () => {
+    open([resolvableStation('Delta', 'Group A'), embedStation('Charlie', 'Group A')]);
+    const tiles = Array.from(container.querySelectorAll('.w3u-tile'));
+    expect(tiles[0].querySelector('.w3u-badge')).toBeNull();
+    expect(tiles[0].classList.contains('w3u-tile-embed')).toBe(false);
+    expect(tiles[1].querySelector('.w3u-badge')).not.toBeNull();
   });
 
   it('moves between titles, to the group list, and out through the tab bar', () => {
@@ -172,8 +197,107 @@ describe('W3uView detail', () => {
     expect(detail.querySelector('.detail-btn')?.textContent).toContain('Open in TV browser');
     pressKey(view, 'select');
     expect(handlers.onOpenInBrowser).toHaveBeenCalledTimes(1);
-    expect(handlers.onOpenInBrowser.mock.calls[0][0]).toMatchObject({ name: 'Charlie', kind: 'embed' });
+    expect(handlers.onOpenInBrowser.mock.calls[0][0]).toMatchObject({ name: 'Charlie', kind: 'browser' });
     expect(handlers.onPlay).not.toHaveBeenCalled();
+  });
+
+  it('plays a resolvable title with the same Play action and no browser note', () => {
+    const resolvable = resolvableStation('Delta', 'Group A');
+    const view = open([resolvable]);
+    pressKey(view, 'select');
+    const detail = container.querySelector('.w3u-layer-detail')!;
+    expect(detail.querySelector('.detail-btn')?.textContent).toContain('Play');
+    expect(detail.querySelector('.detail-btn')?.textContent).not.toContain('browser');
+    expect(detail.querySelector('.w3u-note')).toBeNull();
+    pressKey(view, 'select');
+    expect(handlers.onPlay).toHaveBeenCalledWith(resolvable);
+    expect(handlers.onOpenInBrowser).not.toHaveBeenCalled();
+  });
+
+  describe('while a resolvable title starts', () => {
+    let finish: () => void;
+
+    function startResolving(): W3uView {
+      handlers.onPlay.mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+      const view = open([resolvableStation('Delta', 'Group A')]);
+      pressKey(view, 'select');
+      pressKey(view, 'select');
+      return view;
+    }
+
+    const button = (): HTMLElement => container.querySelector<HTMLElement>('.w3u-layer-detail .detail-btn')!;
+
+    it('keeps the title and ring and shows Starting on the action', () => {
+      startResolving();
+      expect(button().textContent).toContain('Starting');
+      expect(button().textContent).not.toContain('Play');
+      expect(button().getAttribute('aria-busy')).toBe('true');
+      expect(button().classList.contains('w3u-busy')).toBe(true);
+      expect(container.querySelector('.w3u-layer-detail .detail-title')?.textContent).toBe('Delta');
+      expect(focusedKeys()).toEqual(['d:action']);
+    });
+
+    it('ignores another OK while starting', () => {
+      const view = startResolving();
+      pressKey(view, 'select');
+      expect(handlers.onPlay).toHaveBeenCalledTimes(1);
+    });
+
+    it('returns to Play once the host settles', async () => {
+      startResolving();
+      finish();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(button().textContent).toContain('Play');
+      expect(button().getAttribute('aria-busy')).toBe('false');
+      expect(focusedKeys()).toEqual(['d:action']);
+    });
+
+    it('cancels the start on Back and returns to the grid', async () => {
+      const view = startResolving();
+      pressKey(view, 'back');
+      expect(handlers.onCancelPlay).toHaveBeenCalledTimes(1);
+      expect(container.querySelector('.w3u-layer-detail')?.classList.contains('catalog-layer-hidden')).toBe(true);
+      expect(focusedKeys()).toEqual(['t:0']);
+      expect(handlers.onBack).not.toHaveBeenCalled();
+      finish();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(container.querySelector('.w3u-layer-detail')?.textContent?.trim()).toBe('');
+    });
+
+    it('does not let a canceled start clear a newer one', async () => {
+      const resolvers: Array<() => void> = [];
+      handlers.onPlay.mockImplementation(() => new Promise<void>((resolve) => { resolvers.push(resolve); }));
+      const view = open([resolvableStation('Delta', 'Group A')]);
+      pressKey(view, 'select');
+      pressKey(view, 'select');
+      pressKey(view, 'back');
+      pressKey(view, 'select');
+      pressKey(view, 'select');
+      expect(resolvers).toHaveLength(2);
+      resolvers[0]();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(button().textContent).toContain('Starting');
+    });
+
+    it('does not cancel when nothing is starting', () => {
+      const view = open([station('Alpha', 'Group A')]);
+      pressKey(view, 'select');
+      pressKey(view, 'select');
+      pressKey(view, 'back');
+      expect(handlers.onCancelPlay).not.toHaveBeenCalled();
+    });
+  });
+
+  it('does not show Starting for a direct title', () => {
+    const view = open([station('Alpha', 'Group A')]);
+    handlers.onPlay.mockReturnValue(Promise.resolve());
+    pressKey(view, 'select');
+    pressKey(view, 'select');
+    expect(container.querySelector('.w3u-layer-detail .detail-btn')?.textContent).toContain('Play');
+    expect(container.querySelector('.w3u-busy')).toBeNull();
   });
 
   it('closes on Back and returns the ring to the title it came from', () => {

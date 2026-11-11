@@ -551,5 +551,6 @@ export const ES_MESSAGES = {
   'w3u.browserBadge': 'Navegador',
   'w3u.openInBrowser': 'Abrir en el navegador del televisor',
   'w3u.browserNote': 'Este título se reproduce en su propio sitio web. Ábrelo en el navegador del televisor para verlo.',
+  'w3u.starting': 'Iniciando…',
   'w3u.browserUnavailable': "No se pudo abrir el navegador del televisor.",
 } satisfies MessageCatalog;

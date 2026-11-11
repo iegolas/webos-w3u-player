@@ -583,5 +583,6 @@ export const PL_MESSAGES = {
   'w3u.browserBadge': 'Przeglądarka',
   'w3u.openInBrowser': 'Otwórz w przeglądarce TV',
   'w3u.browserNote': 'Ten tytuł odtwarza się na własnej stronie internetowej. Otwórz go w przeglądarce TV, aby obejrzeć.',
+  'w3u.starting': 'Uruchamianie…',
   'w3u.browserUnavailable': "Nie udało się otworzyć przeglądarki telewizora.",
 } as const satisfies MessageCatalog;
