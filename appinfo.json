@@ -1,7 +1,7 @@
 {
-  "id": "com.pablo.w3uplayer",
-  "version": "1.17.8",
-  "vendor": "Pablo",
+  "id": "com.w3uplayer",
+  "version": "1.17.9",
+  "vendor": "Iegolas",
   "type": "web",
   "main": "index.html",
   "title": "W3U Player",

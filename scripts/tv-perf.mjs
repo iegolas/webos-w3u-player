@@ -25,7 +25,7 @@ import {
 } from './cdp-logs.mjs';
 import { formatOptions, parseArgs } from './cli-args.mjs';
 
-const DEFAULT_APP_ID = 'com.pablo.w3uplayer';
+const DEFAULT_APP_ID = 'com.w3uplayer';
 
 export const PERFORMANCE_SPEC = {
   maxPositionals: 0,

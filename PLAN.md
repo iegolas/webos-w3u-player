@@ -27,7 +27,7 @@ it already solves the parts that are expensive and webOS-specific:
 
 Upstream is **Apache-2.0**: the fork keeps `LICENSE` + `THIRD_PARTY_NOTICES.txt`
 and records changes. This tree now ships as **W3U Player**
-(`com.pablo.w3uplayer`, vendor `Pablo`), so any redistribution must keep the
+(`com.w3uplayer`, vendor `Iegolas`), so any redistribution must keep the
 upstream Apache-2.0 `LICENSE` and `THIRD_PARTY_NOTICES.txt` and credit
 `lennylxx/webos-iptv-player`.
 
@@ -130,7 +130,7 @@ npm run build && ./build.sh --install <device>   # needs a TV in dev mode
 The fork builds as its own app: `npm run build` bundles into `dist/`, and
 `npm run package` (= `bash build.sh`) lints, type-checks, builds the bundled
 service, and runs `ares-package` to produce
-`com.pablo.w3uplayer_<version>_all.ipk` plus its manifest in the repo root.
+`com.w3uplayer_<version>_all.ipk` plus its manifest in the repo root.
 The version comes only from `package.json`; `esbuild.config.mjs` copies it
 into `appinfo.json` at build time, so it is never hand-edited.
 
@@ -161,7 +161,7 @@ Working today, verified in a real browser at 1920x1080 against a live W3U list:
 - `openInBrowser` hands embed entries to `com.webos.app.browser`; a failed or
   off-TV launch shows a toast instead of claiming success.
 - Gates: `tsc`, `eslint` + stylelint compat gate, 4009 unit tests, esbuild
-  Chromium-53 gate, IPK packaging (`com.pablo.w3uplayer_1.17.0_all.ipk`, 788 KB).
+  Chromium-53 gate, IPK packaging (`com.w3uplayer_1.17.0_all.ipk`, 788 KB).
 
 Still open:
 

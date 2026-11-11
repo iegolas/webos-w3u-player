@@ -946,8 +946,8 @@ describe('parsePerformanceArgs', () => {
       intervalMs: 1000,
       durationMs: null,
       mode: 'monitor',
-      appId: 'com.pablo.w3uplayer',
-      target: 'com.pablo.w3uplayer',
+      appId: 'com.w3uplayer',
+      target: 'com.w3uplayer',
       targetSelection: 'legacy-tv-app',
     });
   });

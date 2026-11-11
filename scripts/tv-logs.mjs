@@ -22,7 +22,7 @@ import {
   subscribeCdpLogs,
 } from './cdp-logs.mjs';
 
-const DEFAULT_APP_ID = 'com.pablo.w3uplayer';
+const DEFAULT_APP_ID = 'com.w3uplayer';
 const DEFAULT_PORT = 9998;
 const DEFAULT_SECONDS = 0;
 // Mirrors serviceLogDir() in bundled-service/src/service-log.ts.
@@ -97,7 +97,7 @@ export function serviceLogCommand({ history, seconds }) {
   const tail = `tail -n ${history ? '+1' : '0'} -F "$log" 2>/dev/null`;
   return [
     SERVICE_LOG_TEMP_ROOT,
-    'log="$temp_root/com.pablo.w3uplayer.service.log"',
+    'log="$temp_root/com.w3uplayer.service.log"',
     '[ -e "$log" ] || echo "tv-logs: waiting for $log; has the service started?" >&2',
     ...(history ? ['cat "$log.1" 2>/dev/null'] : []),
     // webOS 4 busybox may lack a positional `timeout`; stop tail by hand.

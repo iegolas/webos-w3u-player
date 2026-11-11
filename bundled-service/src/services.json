@@ -1,9 +1,9 @@
 {
-  "id": "com.pablo.w3uplayer.service",
+  "id": "com.w3uplayer.service",
   "description": "Bundled webOS JS service for the W3U Player",
   "services": [
     {
-      "name": "com.pablo.w3uplayer.service"
+      "name": "com.w3uplayer.service"
     }
   ]
 }

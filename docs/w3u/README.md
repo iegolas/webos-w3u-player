@@ -5,7 +5,7 @@ main-branch update can be rebased onto without re-discovering it.
 
 **Baseline:** upstream `lennllxx/webos-iptv-player`, commit `d27beca`,
 version `1.17.0` (Apache-2.0).
-**This tree:** `w3u-xuper`, version `1.17.5`, app id `com.pablo.w3uplayer`.
+**This tree:** `w3u-xuper`, version `1.17.5`, app id `com.w3uplayer`.
 **Delta:** 4 commits, 76 files, ~9,000 added lines.
 
 | Document | Read it when |

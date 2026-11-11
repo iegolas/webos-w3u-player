@@ -53,7 +53,7 @@ import {
   runParentalBenchmark,
 } from './benchmark-suite.mjs';
 
-const APP_ID = 'com.pablo.w3uplayer';
+const APP_ID = 'com.w3uplayer';
 const ACCOUNT_ID = 'benchmark-x1';
 const EPG_URL = 'http://host/benchmark-epg';
 const BACKUP_KEY = '__tv_benchmark_backup__';

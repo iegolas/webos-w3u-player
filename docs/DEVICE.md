@@ -4,9 +4,9 @@ This fork packages as its own webOS app:
 
 | Field | Value |
 | --- | --- |
-| App id | `com.pablo.w3uplayer` |
+| App id | `com.w3uplayer` |
 | Title | W3U Player |
-| Vendor | Pablo |
+| Vendor | Iegolas |
 | Version | from `package.json` (synced into `appinfo.json` by the build) |
 
 The package is sideloaded over the TV's Developer Mode SSH endpoint. There is
@@ -48,9 +48,9 @@ npm run package    # bash build.sh: lint, build, service build, package
 `ares-package: command not found` (or `ares-package not found`) until
 `@webos-tools/cli` is installed. It produces, in the repository root:
 
-- `com.pablo.w3uplayer_<version>_all.ipk` — the installable package
+- `com.w3uplayer_<version>_all.ipk` — the installable package
   (`dist/` + `build/bundled-service/`, without `preview-libs.js`);
-- `com.pablo.w3uplayer.manifest.json` — the Homebrew Channel manifest.
+- `com.w3uplayer.manifest.json` — the Homebrew Channel manifest.
 
 `build.sh --install [device]` installs and cold-starts in one step once a
 device is registered. Without the CLI, build the bundle with `npm run build`
@@ -96,14 +96,14 @@ the other commands to use the default (first) one. If the TV's IP changes
 ## Sideload and run
 
 ```bash
-ares-install --device tv ./com.pablo.w3uplayer_<version>_all.ipk
-ares-launch  --device tv com.pablo.w3uplayer
+ares-install --device tv ./com.w3uplayer_<version>_all.ipk
+ares-launch  --device tv com.w3uplayer
 
 # Cold restart after an upgrade (see AGENTS.md): webOS keeps the old instance
 # suspended through an in-place install, and a plain relaunch resumes that
 # stale bundle. Close first, then launch again.
-ares-launch --device tv --close com.pablo.w3uplayer
-ares-launch --device tv com.pablo.w3uplayer
+ares-launch --device tv --close com.w3uplayer
+ares-launch --device tv com.w3uplayer
 ```
 
 `build.sh --install tv` performs the install, close, and cold relaunch for you.
@@ -111,12 +111,12 @@ ares-launch --device tv com.pablo.w3uplayer
 ## Debug on the TV
 
 ```bash
-ares-launch  --device tv com.pablo.w3uplayer          # if not running
-ares-inspect --device tv --open com.pablo.w3uplayer   # DevTools page inspector
+ares-launch  --device tv com.w3uplayer          # if not running
+ares-inspect --device tv --open com.w3uplayer   # DevTools page inspector
 ```
 
 The TV exposes a page-level CDP socket only; app `console.*` output appears in
-the inspector it opens (or via `scripts/tv.sh logs --app com.pablo.w3uplayer`).
+the inspector it opens (or via `scripts/tv.sh logs --app com.w3uplayer`).
 `scripts/tv.sh` reads the default `ares-setup-device` entry, so the device name
 and passphrase never need to be copied into commands; set
 `TV_DEVICE=<name>` for a non-default device.
@@ -130,10 +130,10 @@ and passphrase never need to be copied into commands; set
 - `scripts/tv.sh`, `benchmarks/tv-runner.mjs`, and the E2E specs now use the
   renamed ids, so they stay in step with `appinfo.json` and
   `bundled-service/src/services.json`.
-- The bundled service uses `com.pablo.w3uplayer.service`; its log path
-  (`com.pablo.w3uplayer.service.log`) is what `scripts/tv.sh logs --service`
+- The bundled service uses `com.w3uplayer.service`; its log path
+  (`com.w3uplayer.service.log`) is what `scripts/tv.sh logs --service`
   tails.
 - The Homebrew Channel listing descriptor (`homebrew-repository.json`) was
   removed because it only advertised upstream's id and releases; packaging
-  still writes `com.pablo.w3uplayer.manifest.json`, and a fork-owned listing
+  still writes `com.w3uplayer.manifest.json`, and a fork-owned listing
   can be re-added once this repo has its own release URL.

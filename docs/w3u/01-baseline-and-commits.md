@@ -42,7 +42,7 @@ left uncommitted while the features were still being tested.
   dropped).
 - Identity: `appinfo.json`, `bundled-service/src/services.json`,
   `build.sh`, `scripts/tv-*.mjs`, `benchmarks/tv-runner.mjs`,
-  `e2e/*.spec.ts` renamed to `com.pablo.w3uplayer[.service]`;
+  `e2e/*.spec.ts` renamed to `com.w3uplayer[.service]`;
   `homebrew-repository.json` deleted (it advertised upstream's id).
 - Docs: `PLAN.md`, `docs/DEVICE.md`.
 

@@ -70,9 +70,9 @@ file onto a newer main.
 
 | File | Change |
 | --- | --- |
-| `appinfo.json` | id `com.pablo.w3uplayer`, vendor/title/description |
+| `appinfo.json` | id `com.w3uplayer`, vendor/title/description |
 | `package.json` | version, version lifecycle unchanged |
-| `bundled-service/src/services.json` | service id `com.pablo.w3uplayer.service` |
+| `bundled-service/src/services.json` | service id `com.w3uplayer.service` |
 | `build.sh` | launch/close by the id declared in `appinfo.json` |
 | `scripts/tv-*.mjs` (+ 2 tests), `benchmarks/tv-runner.mjs` | default app id and service log path |
 | `e2e/drm-playback.spec.ts`, `luna-playback.spec.ts`, `startup.spec.ts` | renamed ids |
