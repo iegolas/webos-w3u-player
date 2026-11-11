@@ -970,10 +970,13 @@ export class W3uView {
     this.scrollGuard.syncOffset(view, 'vertical', offset === 0 ? 0 : offset + this.trackStart(view, track), instant);
   }
 
+  // The initial letter always sits in the box; the artwork covers it once it
+  // loads, and a failed or slow image leaves the letter showing.
   private posterCell(name: string, poster: string): Safe {
+    const initial = html`<div class="catalog-poster catalog-poster-empty">${name.charAt(0)}</div>`;
     return poster
-      ? html`<img class="catalog-poster" src="${poster}" alt="" loading="lazy" onerror="this.style.display='none'">`
-      : html`<div class="catalog-poster catalog-poster-empty">${name.charAt(0)}</div>`;
+      ? html`${initial}<img class="catalog-poster w3u-poster-art" src="${poster}" alt="" loading="lazy" onerror="this.style.display='none'">`
+      : initial;
   }
 
   private groupRow(group: W3uGroup, index: number, active: boolean): Safe {

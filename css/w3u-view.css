@@ -190,6 +190,16 @@
   border-top-color: #fff;
 }
 
+/* Poster artwork lies over the initial-letter tile in the same box, so a slow
+   or blocked image leaves the tile showing and nothing shifts on load. */
+.w3u-tile .catalog-poster-wrap,
+.w3u-detail .detail-poster-wrap { position: relative; }
+.catalog-poster.w3u-poster-art {
+  position: absolute;
+  top: 0;
+  left: 0;
+}
+
 /* Pane: the open group's title and poster grid. */
 .w3u-pane {
   display: flex;

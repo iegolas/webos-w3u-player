@@ -164,6 +164,51 @@ describe('W3uView library', () => {
     expect(container.querySelector('.catalog-tile-name')?.textContent).toBe('<img src="x-probe">');
   });
 
+  describe('poster artwork', () => {
+    const art = (url: string): Channel => station('Delta', 'Group A', { logo: url });
+    const css = readFileSync(resolve(__dirname, '../../css/w3u-view.css'), 'utf8');
+
+    it('draws the initial-letter tile with the image over it when a poster exists', () => {
+      open([art('http://img.test/a.jpg')]);
+      const wrap = container.querySelector('.catalog-poster-wrap')!;
+      expect(Array.from(wrap.children).map((el) => el.tagName)).toEqual(['DIV', 'IMG']);
+      const [tile, image] = Array.from(wrap.children);
+      expect(tile.classList.contains('catalog-poster-empty')).toBe(true);
+      expect(tile.textContent).toBe('D');
+      expect(image.getAttribute('src')).toBe('http://img.test/a.jpg');
+      expect(image.classList.contains('w3u-poster-art')).toBe(true);
+    });
+
+    it('hides a failed image so the tile shows, with no extra stops or text', () => {
+      open([art('http://img.test/a.jpg')]);
+      const wrap = container.querySelector('.catalog-poster-wrap')!;
+      expect(wrap.querySelector('img')?.getAttribute('onerror')).toBe("this.style.display='none'");
+      expect(wrap.querySelectorAll('[data-focusable]').length).toBe(0);
+      expect(wrap.textContent).toBe('D');
+    });
+
+    it('draws only the tile for a title without a poster', () => {
+      open([station('Delta', 'Group A')]);
+      const wrap = container.querySelector('.catalog-poster-wrap')!;
+      expect(wrap.querySelector('img')).toBeNull();
+      expect(Array.from(wrap.children).map((el) => el.className)).toEqual(['catalog-poster catalog-poster-empty']);
+    });
+
+    it('lays the image over the tile in the same box in the grid and the detail', () => {
+      expect(css).toMatch(/\.catalog-poster\.w3u-poster-art \{[^}]*position: absolute;[^}]*top: 0;[^}]*left: 0;/);
+      expect(css).toMatch(/\.w3u-tile \.catalog-poster-wrap,\s*\.w3u-detail \.detail-poster-wrap \{ position: relative; \}/);
+    });
+
+    it('draws the same pair on the detail poster', () => {
+      const view = open([art('http://img.test/a.jpg')]);
+      pressKey(view, 'select');
+      const wrap = container.querySelector('.w3u-layer-detail .detail-poster-wrap')!;
+      expect(Array.from(wrap.children).map((el) => el.tagName)).toEqual(['DIV', 'IMG']);
+      expect(wrap.querySelector('img')?.getAttribute('onerror')).toBe("this.style.display='none'");
+      expect(wrap.children[0].textContent).toBe('D');
+    });
+  });
+
   it('keeps one ring on a virtualized grid while moving past its window', () => {
     const many = Array.from({ length: 300 }, (_, i) => station(`Title ${i}`, 'Group A'));
     const view = open(many);
