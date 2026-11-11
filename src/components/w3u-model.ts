@@ -1,9 +1,10 @@
-import type { Channel } from '../types';
+import type { Channel, ParsedPlaylist, W3uGroupLink } from '../types';
 import { UNCATEGORIZED_GROUP } from '../types';
 import { CONFIG } from '../config';
 import { truncate } from '../utils/text';
 import { classifyStreamUrl } from '../utils/stream-url-classifier';
 import { isResolvableEmbedHost } from '../services/embed-resolver';
+import { fetchAndParseM3U } from '../parsers/m3u-loader';
 
 // Display-only data for the W3U Library. Everything here derives from the
 // parsed channels; nothing is written back, so stored names stay as delivered.
@@ -22,17 +23,52 @@ export interface W3uStation {
   synopsis: string;
 }
 
+// Why a linked row cannot be opened: 'limit' is the depth cap, 'open' is a
+// playlist already on the way here.
+export type LinkBlock = 'limit' | 'open';
+
+// How much of a list is shown: `shown` of the `found` titles it holds.
+export interface W3uCut {
+  shown: number;
+  found: number;
+}
+
+// A group row that opens another playlist. `stations` stays empty until the
+// view fetches the list; `ready` then says the stations are in place.
+export interface W3uLink {
+  url: string;
+  image: string;
+  ready: boolean;
+  cut: W3uCut | null;
+  blocked?: LinkBlock;
+}
+
 export interface W3uGroup {
   id: string;
   label: string;
   uncategorized: boolean;
   stations: W3uStation[];
+  link?: W3uLink;
 }
 
 export interface W3uLibrary {
   groups: W3uGroup[];
   total: number;
 }
+
+// Bounds for linked playlists. MAX_DEPTH counts lists opened from the root
+// (root -> list -> list -> list is 3); a list at that depth still shows its
+// links, marked as closed. MAX_STATIONS caps one list and MAX_TOTAL_STATIONS
+// caps the lists held at once: those on the way here plus the cached ones.
+// The total must leave room for every list on the way, or a deep one would
+// have nothing to show.
+export const W3U_LINK_LIMITS = {
+  TIMEOUT_MS: 20000,
+  MAX_STATIONS: 1000,
+  MAX_TOTAL_STATIONS: 2500,
+  MAX_DEPTH: 3,
+  CACHE_ENTRIES: 8,
+} as const;
 
 // Wiseplay list authors style text with Mathematical Alphanumeric letters and
 // Letterlike capitals; the TV font draws those as blank boxes.
@@ -77,7 +113,11 @@ export function isW3uChannel(channel: Channel): boolean {
   return false;
 }
 
-export function hasW3uLibrary(channels: readonly Channel[]): boolean {
+export function hasW3uLibrary(
+  channels: readonly Channel[],
+  links: readonly W3uGroupLink[] = [],
+): boolean {
+  if (links.length > 0) return true;
   for (let index = 0; index < channels.length; index++) {
     if (isW3uChannel(channels[index])) return true;
   }
@@ -170,19 +210,11 @@ function stationFor(channel: Channel): W3uStation {
   };
 }
 
-// Groups the stations of every W3U playlist in source order. A W3U station
-// that carries no metadata at all has no w3u-* mark, so a channel also
-// counts when it shares a playlist with a marked one.
-export function buildW3uLibrary(channels: readonly Channel[]): W3uLibrary {
-  const playlistIds = new Set<string>();
-  for (const channel of channels) {
-    if (isW3uChannel(channel)) channel.playlistIds.forEach((id) => playlistIds.add(id));
-  }
+function groupChannels(channels: Iterable<Channel>): { groups: W3uGroup[]; total: number } {
   const groups: W3uGroup[] = [];
   const byId = new Map<string, W3uGroup>();
   let total = 0;
   for (const channel of channels) {
-    if (!isW3uChannel(channel) && !channel.playlistIds.some((id) => playlistIds.has(id))) continue;
     let group = byId.get(channel.group);
     if (!group) {
       group = {
@@ -198,4 +230,190 @@ export function buildW3uLibrary(channels: readonly Channel[]): W3uLibrary {
     total++;
   }
   return { groups, total };
+}
+
+// Only a web address can be fetched; a link to anything else is dropped.
+function isFetchableUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url);
+}
+
+// The form two addresses are compared in, and the cache key: scheme and host
+// in lower case, no fragment. The path and query stay as written, because a
+// query can carry the credentials that tell two lists apart. Never shown.
+export function canonicalUrl(url: string): string {
+  const trimmed = url.trim();
+  try {
+    const parsed = new URL(trimmed);
+    parsed.hash = '';
+    return parsed.href;
+  } catch {
+    return trimmed
+      .replace(/#.*$/, '')
+      .replace(/^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*)/i, (_all, scheme: string, authority: string) => {
+        const at = authority.lastIndexOf('@');
+        return scheme.toLowerCase() + authority.slice(0, at + 1) + authority.slice(at + 1).toLowerCase();
+      });
+  }
+}
+
+// A link name is shown as written, except one that is itself an address: that
+// can carry a username and password, so only its host is shown.
+function linkLabel(name: string, url: string): string {
+  const cleaned = cleanDisplayText(name);
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(cleaned) ? hostOf(cleaned) : cleaned || hostOf(url);
+}
+
+// Rows for the playlists a list links to, one per address. `path` holds the
+// addresses already open on the way here: a row for one of them stays but is
+// marked 'open'. `atLimit` marks every row 'limit'. Neither kind is fetched.
+export function linkRows(
+  links: readonly W3uGroupLink[],
+  path: ReadonlySet<string> = new Set(),
+  atLimit = false,
+): W3uGroup[] {
+  const rows: W3uGroup[] = [];
+  const seen = new Set<string>();
+  for (const link of links) {
+    const url = link.url.trim();
+    if (!url || !isFetchableUrl(url)) continue;
+    const key = canonicalUrl(url);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const blocked: LinkBlock | undefined = path.has(key) ? 'open' : atLimit ? 'limit' : undefined;
+    rows.push({
+      id: `link:${key}`,
+      label: linkLabel(link.name, url),
+      uncategorized: false,
+      stations: [],
+      link: { url, image: link.image, ready: false, cut: null, ...(blocked ? { blocked } : {}) },
+    });
+  }
+  return rows;
+}
+
+// Groups the stations of every W3U playlist in source order, then adds a row
+// for each linked playlist. A W3U station that carries no metadata at all has
+// no w3u-* mark, so a channel also counts when it shares a playlist with a
+// marked one.
+export function buildW3uLibrary(
+  channels: readonly Channel[],
+  links: readonly W3uGroupLink[] = [],
+  rootUrls: readonly string[] = [],
+): W3uLibrary {
+  const playlistIds = new Set<string>();
+  for (const channel of channels) {
+    if (isW3uChannel(channel)) channel.playlistIds.forEach((id) => playlistIds.add(id));
+  }
+  const { groups, total } = groupChannels(
+    channels.filter((channel) => isW3uChannel(channel) || channel.playlistIds.some((id) => playlistIds.has(id))),
+  );
+  return { groups: groups.concat(linkRows(links, new Set(rootUrls.map(canonicalUrl)))), total };
+}
+
+export type LinkFailure = 'network' | 'parse';
+
+export class LinkFailureError extends Error {
+  constructor(readonly reason: LinkFailure) {
+    super(`linked playlist ${reason} failure`);
+    this.name = 'LinkFailureError';
+  }
+}
+
+// A fetch that never produced bytes (offline, a host that blocks this app's
+// origin, a bad status, a timeout) is a network failure; bytes that did not
+// make a playlist are a parse failure.
+export function classifyLinkFailure(error: unknown): LinkFailure {
+  if (error instanceof LinkFailureError) return error.reason;
+  const details = (error as { details?: { stage?: unknown; reason?: unknown } } | null)?.details;
+  if (details && typeof details === 'object') {
+    if (details.reason === 'http' || details.reason === 'timeout') return 'network';
+    if (details.stage === 'fetch' || details.stage === 'read') return 'network';
+    return 'parse';
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  return /fetch|network|HTTP \d|timeout|timed out|abort|load failed/i.test(message) ? 'network' : 'parse';
+}
+
+export interface LinkedList {
+  groups: W3uGroup[];
+  links: W3uGroupLink[];
+  // Titles kept, and titles the list holds.
+  total: number;
+  found: number;
+}
+
+export function stationCount(groups: readonly W3uGroup[]): number {
+  return groups.reduce((sum, group) => sum + group.stations.length, 0);
+}
+
+export function cutOf(list: LinkedList): W3uCut | null {
+  return list.found > list.total ? { shown: list.total, found: list.found } : null;
+}
+
+export function buildLinkedList(
+  parsed: ParsedPlaylist,
+  limit: number = W3U_LINK_LIMITS.MAX_STATIONS,
+): LinkedList {
+  const found = parsed.channels.length;
+  const kept = Math.max(0, Math.min(limit, W3U_LINK_LIMITS.MAX_STATIONS));
+  const { groups, total } = groupChannels(found > kept ? parsed.channels.slice(0, kept) : parsed.channels);
+  return { groups, links: parsed.groupLinks ?? [], total, found };
+}
+
+type LinkFetcher = (url: string, timeout: number) => Promise<{ data: ParsedPlaylist }>;
+
+// Fetches linked playlists one at a time. Starting a load or calling `abort`
+// retires the one in flight: its result is dropped (`load` resolves to null),
+// so a late answer never reaches a screen the viewer has left. The loader
+// takes no abort signal, so the timeout is what ends a retired request.
+// Lists are cached per session by canonical address, so the same list reached
+// by another path is not fetched again. The cache keeps at most
+// CACHE_ENTRIES lists and MAX_TOTAL_STATIONS titles, dropping the least
+// recently used first.
+export class W3uLinkLoader {
+  private readonly cache = new Map<string, LinkedList>();
+  private generation = 0;
+
+  constructor(private readonly fetcher: LinkFetcher = fetchAndParseM3U) {}
+
+  get(url: string): LinkedList | undefined {
+    const key = canonicalUrl(url);
+    const hit = this.cache.get(key);
+    if (!hit) return undefined;
+    this.cache.delete(key);
+    this.cache.set(key, hit);
+    return hit;
+  }
+
+  abort(): void {
+    this.generation++;
+  }
+
+  // `limit`: the titles the caller has room for.
+  async load(url: string, limit: number = W3U_LINK_LIMITS.MAX_STATIONS): Promise<LinkedList | null> {
+    const generation = ++this.generation;
+    const cached = this.get(url);
+    if (cached) return cached;
+    let parsed: ParsedPlaylist;
+    try {
+      parsed = (await this.fetcher(url.trim(), W3U_LINK_LIMITS.TIMEOUT_MS)).data;
+    } catch (error) {
+      if (generation !== this.generation) return null;
+      throw new LinkFailureError(classifyLinkFailure(error));
+    }
+    if (generation !== this.generation) return null;
+    const list = buildLinkedList(parsed, limit);
+    if (!list.groups.length && !list.links.length) throw new LinkFailureError('parse');
+    const key = canonicalUrl(url);
+    this.cache.set(key, list);
+    let held = 0;
+    this.cache.forEach((entry) => { held += entry.total; });
+    for (const oldest of Array.from(this.cache.keys())) {
+      if (this.cache.size <= 1) break;
+      if (this.cache.size <= W3U_LINK_LIMITS.CACHE_ENTRIES && held <= W3U_LINK_LIMITS.MAX_TOTAL_STATIONS) break;
+      held -= this.cache.get(oldest)?.total ?? 0;
+      this.cache.delete(oldest);
+    }
+    return list;
+  }
 }

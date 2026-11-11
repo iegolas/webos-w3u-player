@@ -585,4 +585,13 @@ export const PL_MESSAGES = {
   'w3u.browserNote': 'Ten tytuł odtwarza się na własnej stronie internetowej. Otwórz go w przeglądarce TV, aby obejrzeć.',
   'w3u.starting': 'Uruchamianie…',
   'w3u.browserUnavailable': "Nie udało się otworzyć przeglądarki telewizora.",
+  'w3u.linkIdle': "Wybierz tę playlistę, aby zobaczyć jej tytuły.",
+  'w3u.linkFailed': "Nie udało się wczytać tej playlisty.",
+  'w3u.linkFailedNetwork': "Serwer nie odpowiedział lub zablokował żądanie. Wybierz playlistę, aby spróbować ponownie.",
+  'w3u.linkFailedParse': "Ta playlista jest pusta lub ma format, którego aplikacja nie może odczytać.",
+  'w3u.listTruncated': "Wyświetlono {shown} z {found} tytułów.",
+  'w3u.linkLimit': "Osiągnięto limit",
+  'w3u.linkOpen': "Już otwarta",
+  'w3u.linkLimitHint': "Głębokość zagnieżdżonych playlist jest ograniczona: {count}. Ta playlista pozostaje zamknięta.",
+  'w3u.linkOpenHint': "Ta playlista jest już otwarta na drodze do tego miejsca. Wróć, aby do niej przejść.",
 } as const satisfies MessageCatalog;

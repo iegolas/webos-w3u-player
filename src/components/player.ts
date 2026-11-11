@@ -99,6 +99,9 @@ export class Player {
   private currentSource: LiveSource | null = null;
   private currentIndex = -1;
   private currentIndexAnchor = -1;
+  // A linked W3U title has no playlist index, so channel up/down must not
+  // step from the last indexed position.
+  private detachedChannel = false;
   // The view (group/playlist) the current channel was launched from, if any —
   // null for launches with no such view (search, reminders, resume-on-boot),
   // which keeps channel_up/channel_down on the full list exactly as before.
@@ -777,9 +780,30 @@ export class Player {
       log.warn('play() ignored — no channel or video element', { channelIndex, hasChannel: !!channel });
       return;
     }
+    this.playChannelResolved(channel, channelIndex, catchup, scope, preview, source);
+  }
+
+  /** Plays a channel that is not in the playlist index (a linked W3U list). */
+  playChannel(channel: Channel, catchup?: CatchupInfo, source?: LiveSource): void {
+    if (!this.videoEl) {
+      log.warn('playChannel() ignored — no video element');
+      return;
+    }
+    this.playChannelResolved(channel, -1, catchup, null, false, source);
+  }
+
+  private playChannelResolved(
+    channel: Channel,
+    channelIndex: number,
+    catchup: CatchupInfo | undefined,
+    scope: ChannelScope | null | undefined,
+    preview: boolean,
+    source: LiveSource | undefined,
+  ): void {
     this.authorizeLive(
       channel,
       () => {
+        this.detachedChannel = channelIndex < 0;
         this.currentSource = source || null;
         this.playResolved(channel, channelIndex, catchup, scope);
       },
@@ -827,6 +851,7 @@ export class Player {
     this.currentChannel = channel;
     this.currentIndex = channelIndex;
     if (channelIndex >= 0) this.currentIndexAnchor = channelIndex;
+    else if (this.detachedChannel) this.currentIndexAnchor = -1;
     if (scope !== undefined) this.currentScope = scope;
     this.catchupInfo = catchup || null;
     this.liveSessionActive = !catchup;
@@ -1124,6 +1149,7 @@ export class Player {
     this.lunaResume = null;
     this.lunaRestore = null;
     this.currentSource = null;
+    this.detachedChannel = false;
     this.startPlaybackGeneration();
     this.clearUpNextTimer();
     this.vodTracksLatePending = false;
@@ -1766,11 +1792,13 @@ export class Player {
   }
 
   channelUp(): void {
+    if (this.detachedChannel) return;
     if (this.shouldUseScope()) { this.scopedChannelStep(1); return; }
     this.globalChannelStep(1);
   }
 
   channelDown(): void {
+    if (this.detachedChannel) return;
     if (this.shouldUseScope()) { this.scopedChannelStep(-1); return; }
     this.globalChannelStep(-1);
   }
@@ -1863,6 +1891,7 @@ export class Player {
       this.onPlaybackStateChanged();
       return;
     }
+    this.detachedChannel = false;
     if (this.liveSessionActive && !this.catchupInfo
         && (this.resolveStreamUrl(current, null)
           !== this.resolveStreamUrl(resolved.channel, null)

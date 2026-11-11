@@ -1,5 +1,5 @@
 import { CONFIG } from '../config';
-import type { Channel, EpgSource, ParsedEpg } from '../types';
+import type { Channel, EpgSource, ParsedEpg, PlaylistGroupLink } from '../types';
 import { createLogger } from '../utils/logger';
 import type { SearchIndexCandidate } from '../workers/tasks';
 import {
@@ -135,6 +135,8 @@ interface CachedPlaylistPayload {
   sourceSignature: string;
   channels: Channel[];
   epgSources: EpgSource[];
+  /** Absent in records written before linked W3U groups were cached. */
+  groupLinks?: PlaylistGroupLink[];
   timestamp: number;
 }
 
@@ -163,6 +165,7 @@ let prefixedQuotaSilent = false;
 let scheduledPlaylist: {
   channels: Channel[];
   epgSources: EpgSource[];
+  groupLinks: PlaylistGroupLink[];
   timestamp: number;
   refreshIntervalMs: number | null;
   sourceSignature: string;
@@ -221,6 +224,7 @@ function persistScheduledPlaylist(): void {
     pending.timestamp,
     pending.sourceSignature,
     pending.refreshIntervalMs,
+    pending.groupLinks,
   ).then((stored) => {
     if (stored) {
       for (const listener of playlistWriteListeners) listener();
@@ -296,6 +300,7 @@ export function scheduleCachedPlaylist(
   timestamp = Date.now(),
   refreshIntervalMs: number | null = CONFIG.DEFAULT_PLAYLIST_REFRESH_INTERVAL_MS,
   token: PlaylistCacheToken = playlistCacheToken(),
+  groupLinks: PlaylistGroupLink[] = [],
 ): void {
   if (!channels.length) return;
   if (
@@ -316,6 +321,7 @@ export function scheduleCachedPlaylist(
   scheduledPlaylist = {
     channels,
     epgSources,
+    groupLinks,
     timestamp,
     refreshIntervalMs,
     sourceSignature: token.signature,
@@ -1609,6 +1615,7 @@ export async function getCachedPlaylist(
 ): Promise<{
   channels: Channel[];
   epgSources: EpgSource[];
+  groupLinks: PlaylistGroupLink[];
   timestamp: number;
 } | null> {
   const raw = await readRaw(PLAYLIST_STORE, PLAYLIST_CACHE_KEY);
@@ -1624,6 +1631,7 @@ export async function getCachedPlaylist(
       return {
         channels: payload.channels,
         epgSources: payload.epgSources ?? [],
+        groupLinks: payload.groupLinks ?? [],
         timestamp,
       };
     }
@@ -1637,6 +1645,7 @@ export async function setCachedPlaylist(
   epgSources: EpgSource[] = [],
   timestamp = Date.now(),
   refreshIntervalMs: number | null = CONFIG.DEFAULT_PLAYLIST_REFRESH_INTERVAL_MS,
+  groupLinks: PlaylistGroupLink[] = [],
 ): Promise<boolean> {
   return setCachedPlaylistWithSignature(
     channels,
@@ -1644,6 +1653,7 @@ export async function setCachedPlaylist(
     timestamp,
     playlistSourceSignature(),
     refreshIntervalMs,
+    groupLinks,
   );
 }
 
@@ -1653,6 +1663,7 @@ function setCachedPlaylistWithSignature(
   timestamp: number,
   sourceSignature: string,
   refreshIntervalMs: number | null,
+  groupLinks: PlaylistGroupLink[],
 ): Promise<boolean> {
   if (!channels.length) return Promise.resolve(false);
   return putRaw(PLAYLIST_STORE, {
@@ -1662,6 +1673,7 @@ function setCachedPlaylistWithSignature(
       sourceSignature,
       channels,
       epgSources,
+      groupLinks,
       timestamp,
     } satisfies CachedPlaylistPayload,
     expiresAt: refreshIntervalMs === null ? null : timestamp + refreshIntervalMs,

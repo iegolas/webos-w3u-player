@@ -553,4 +553,13 @@ export const DE_MESSAGES = {
   'w3u.browserNote': 'Dieser Titel wird auf einer eigenen Website abgespielt. Öffnen Sie ihn im TV-Browser, um ihn anzusehen.',
   'w3u.starting': 'Wird gestartet…',
   'w3u.browserUnavailable': "Der TV-Browser konnte nicht geöffnet werden.",
+  'w3u.linkIdle': "Wählen Sie diese Wiedergabeliste aus, um ihre Titel zu sehen.",
+  'w3u.linkFailed': "Die Wiedergabeliste konnte nicht geladen werden.",
+  'w3u.linkFailedNetwork': "Der Server hat nicht geantwortet oder die Anfrage blockiert. Wählen Sie die Wiedergabeliste erneut aus, um es noch einmal zu versuchen.",
+  'w3u.linkFailedParse': "Diese Wiedergabeliste ist leer oder hat ein Format, das die App nicht lesen kann.",
+  'w3u.listTruncated': "{shown} von {found} Titeln werden angezeigt.",
+  'w3u.linkLimit': "Limit erreicht",
+  'w3u.linkOpen': "Bereits geöffnet",
+  'w3u.linkLimitHint': "Wiedergabelisten lassen sich bis zu {count} Ebenen tief öffnen, daher bleibt diese geschlossen.",
+  'w3u.linkOpenHint': "Diese Wiedergabeliste ist auf dem Weg hierher bereits geöffnet. Gehen Sie zurück, um zu ihr zurückzukehren.",
 } satisfies MessageCatalog;

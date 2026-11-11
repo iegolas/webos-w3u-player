@@ -553,4 +553,13 @@ export const PT_BR_MESSAGES = {
   'w3u.browserNote': 'Este título é reproduzido no próprio site. Abra-o no navegador da TV para assistir.',
   'w3u.starting': 'Iniciando…',
   'w3u.browserUnavailable': "Não foi possível abrir o navegador da TV.",
+  'w3u.linkIdle': "Selecione esta lista para ver os títulos dela.",
+  'w3u.linkFailed': "Não foi possível carregar esta lista.",
+  'w3u.linkFailedNetwork': "O servidor não respondeu ou bloqueou a solicitação. Selecione a lista para tentar de novo.",
+  'w3u.linkFailedParse': "Esta lista está vazia ou tem um formato que o app não consegue ler.",
+  'w3u.listTruncated': "Mostrando {shown} de {found} títulos.",
+  'w3u.linkLimit': "Limite atingido",
+  'w3u.linkOpen': "Já aberta",
+  'w3u.linkLimitHint': "As listas abrem até {count} níveis de profundidade, então esta permanece fechada.",
+  'w3u.linkOpenHint': "Esta lista já está aberta no caminho até aqui. Volte para retornar a ela.",
 } satisfies MessageCatalog;

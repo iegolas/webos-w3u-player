@@ -132,6 +132,7 @@ beforeEach(() => {
   PlaylistService.allChannels = [];
   PlaylistService.channels = [];
   PlaylistService.groups = [];
+  PlaylistService.groupLinks = [];
   PlaylistService.playlistTabs = [];
   PlaylistService.epgSources = [];
 });
@@ -384,6 +385,7 @@ describe('PlaylistService.refresh', () => {
       expect.any(Number),
       6 * 60 * 60 * 1000,
       { signature: 's1', generation: 0 },
+      [],
     );
   });
 
@@ -508,6 +510,111 @@ describe('PlaylistService.refresh', () => {
     );
     warn.mockRestore();
     error.mockRestore();
+  });
+});
+
+describe('PlaylistService group links', () => {
+  const W3U_A = JSON.stringify({
+    groups: [
+      { name: 'Shared', image: 'http://host/shared.png', url: 'http://host/shared.w3u' },
+      { name: 'Shared Again', url: 'http://host/shared.w3u' },
+      { name: 'Only A', url: 'http://host/only-a.w3u' },
+    ],
+    stations: [{ name: 'Alpha', url: 'http://stream/u1' }],
+  });
+  const W3U_B = JSON.stringify({
+    groups: [{ name: 'Shared B', url: 'http://host/shared.w3u' }],
+    stations: [{ name: 'Bravo', url: 'http://stream/u2' }],
+  });
+
+  function useW3uSources(): void {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'a', name: 'P1', url: 'http://host/p1.w3u' },
+      { id: 'b', name: 'P2', url: 'http://host/p2.w3u' },
+    ]);
+    fetchTextMock.mockImplementation((url: string) =>
+      Promise.resolve(url.includes('p1') ? W3U_A : W3U_B));
+  }
+
+  it('exposes links from every enabled playlist, de-duplicated by url', async () => {
+    useW3uSources();
+
+    await PlaylistService.refresh();
+
+    expect(PlaylistService.getGroupLinks()).toEqual([
+      {
+        name: 'Shared',
+        image: 'http://host/shared.png',
+        url: 'http://host/shared.w3u',
+        playlistIds: ['a', 'b'],
+        playlistId: 'a',
+      },
+      {
+        name: 'Only A',
+        image: '',
+        url: 'http://host/only-a.w3u',
+        playlistIds: ['a'],
+        playlistId: 'a',
+      },
+    ]);
+    expect(PlaylistService.getGroupLinks('b')).toEqual([
+      expect.objectContaining({ url: 'http://host/shared.w3u' }),
+    ]);
+    expect(cacheMock.scheduleCachedPlaylist.mock.calls[0][5]).toEqual(
+      PlaylistService.getGroupLinks(),
+    );
+  });
+
+  it('drops links of a disabled source and restores them when re-enabled', async () => {
+    useW3uSources();
+    await PlaylistService.refresh();
+    expect(PlaylistService.getGroupLinks().map(link => link.url)).toEqual([
+      'http://host/shared.w3u',
+      'http://host/only-a.w3u',
+    ]);
+
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'a', name: 'P1', url: 'http://host/p1.w3u', enabled: false },
+      { id: 'b', name: 'P2', url: 'http://host/p2.w3u' },
+    ]);
+    await PlaylistService.refresh();
+    expect(PlaylistService.getGroupLinks()).toEqual([
+      expect.objectContaining({
+        url: 'http://host/shared.w3u',
+        playlistIds: ['b'],
+        playlistId: 'b',
+      }),
+    ]);
+
+    useW3uSources();
+    await PlaylistService.refresh();
+    expect(PlaylistService.getGroupLinks()).toHaveLength(2);
+  });
+
+  it('filters cached links for disabled playlists when booting from cache', async () => {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'a', name: 'P1', url: 'http://host/p1.m3u' },
+      { id: 'b', name: 'P2', url: 'http://host/p2.m3u', enabled: false },
+    ]);
+    cacheMock.getCachedPlaylist.mockResolvedValue({
+      channels: [channel({ name: 'Alpha', playlistIds: ['a'] })],
+      epgSources: [],
+      groupLinks: [
+        {
+          name: 'A', image: '', url: 'http://host/a.w3u',
+          playlistIds: ['a'], playlistId: 'a',
+        },
+        {
+          name: 'B', image: '', url: 'http://host/b.w3u',
+          playlistIds: ['b'], playlistId: 'b',
+        },
+      ],
+    });
+
+    await PlaylistService.load();
+
+    expect(PlaylistService.getGroupLinks().map(link => link.url)).toEqual(['http://host/a.w3u']);
+    expect(fetchTextMock).not.toHaveBeenCalled();
   });
 });
 
@@ -1676,6 +1783,7 @@ describe('PlaylistService customization', () => {
       expect.any(Number),
       6 * 60 * 60 * 1000,
       { signature: 's1', generation: 0 },
+      [],
     );
   });
 

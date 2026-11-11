@@ -1335,6 +1335,108 @@ describe('Player live playback', () => {
   });
 });
 
+describe('Player detached channel playback', () => {
+  const DETACHED = {
+    id: 'w1', name: 'Linked One', logo: 'http://host/l1.png', group: '', url: 'http://host/w1',
+    extras: null, playlistIds: [], catchupDays: 0,
+  };
+
+  it('plays a title that is not in the playlist index', async () => {
+    playlistMock.channels = [{ id: 'other' }];
+    player.playChannel(DETACHED);
+    await flush();
+
+    expect(player.getCurrentChannel()).toBe(DETACHED);
+    expect(player.getCurrentIndex()).toBe(-1);
+    expect(playlistMock.getByIndex).not.toHaveBeenCalled();
+    expect(video.src).toContain(DETACHED.url);
+    expect(container.querySelector('.osd-channel-name')?.textContent).toBe('Linked One');
+  });
+
+  it('keeps indexed playback resolving through the playlist', async () => {
+    player.play(0);
+    await flush();
+
+    expect(playlistMock.getByIndex).toHaveBeenCalledWith(0);
+    expect(player.getCurrentChannel()).toBe(CHANNEL);
+    expect(player.getCurrentIndex()).toBe(0);
+    expect(video.src).toContain(CHANNEL.url);
+  });
+
+  it('loads a detached embed through the resolved source', () => {
+    const pipeline = (player as unknown as { pipeline: { load: (...args: unknown[]) => void } }).pipeline;
+    const load = vi.spyOn(pipeline, 'load');
+
+    player.playChannel(DETACHED, undefined, {
+      url: 'http://host/stream.m3u8',
+      headers: { Referer: 'http://host/page' },
+    });
+
+    expect(load).toHaveBeenCalledWith('http://host/stream.m3u8', null, {
+      headers: { Referer: 'http://host/page' },
+    });
+  });
+
+  it('reconnects a detached title from its resolved source', () => {
+    const pipeline = (player as unknown as { pipeline: { load: (...args: unknown[]) => void } }).pipeline;
+    const load = vi.spyOn(pipeline, 'load');
+    vi.spyOn(player as unknown as { recreateVideoEl(): void }, 'recreateVideoEl')
+      .mockImplementation(() => {});
+    player.playChannel(DETACHED, undefined, {
+      url: 'http://host/stream.m3u8',
+      headers: { Referer: 'http://host/page' },
+    });
+    load.mockClear();
+
+    (player as unknown as { reloadCurrentStream(): void }).reloadCurrentStream();
+
+    expect(load).toHaveBeenCalledWith('http://host/stream.m3u8', null, {
+      headers: { Referer: 'http://host/page' },
+      reload: true,
+    });
+  });
+
+  it('stops a detached title on the way out', () => {
+    const onBack = vi.fn();
+    player = new Player(container, onBack);
+    player.init(video);
+    player.playChannel(DETACHED);
+    playlistMock.getByIndex.mockClear();
+    const destroy = vi.spyOn(
+      (player as unknown as { pipeline: { destroy(): void } }).pipeline, 'destroy',
+    );
+
+    player.handleAction('back');
+
+    expect(onBack).toHaveBeenCalledOnce();
+    expect(destroy).toHaveBeenCalledOnce();
+    expect((player as unknown as { currentSource: unknown }).currentSource).toBeNull();
+    expect(playlistMock.getByIndex).not.toHaveBeenCalled();
+  });
+
+  it('records a detached title in recently watched by its channel key', () => {
+    vi.mocked(StorageService.touchRecentlyWatchedLive).mockClear();
+    player.playChannel(DETACHED);
+    video.dispatchEvent(new Event('playing'));
+
+    vi.advanceTimersByTime(CONFIG.RECENTLY_WATCHED.LIVE_CONFIRM_MS);
+
+    expect(StorageService.touchRecentlyWatchedLive).toHaveBeenCalledWith(channelKey(DETACHED));
+  });
+
+  it('does not step to an unrelated channel on channel up/down', () => {
+    playlistMock.channels = [{ id: 'a' }, { id: 'b' }];
+    player.playChannel(DETACHED);
+    playlistMock.getByIndex.mockClear();
+
+    player.channelUp();
+    player.channelDown();
+
+    expect(player.getCurrentChannel()).toBe(DETACHED);
+    expect(playlistMock.getByIndex).not.toHaveBeenCalled();
+  });
+});
+
 describe('Player Luna suspend and resume', () => {
   type LunaPipeline = { isLunaActive(): boolean; lunaClock(): (() => number) | null };
 

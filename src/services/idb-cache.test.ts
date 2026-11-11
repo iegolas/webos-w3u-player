@@ -41,6 +41,7 @@ import {
   CHANNEL_HEALTH_STORE,
   openPersistenceDb,
   requestResult,
+  PLAYLIST_STORE,
   SEARCH_INDEX_STORE,
   STREAM_MIME_STORE,
   SUBTITLE_STORE,
@@ -415,9 +416,49 @@ describe('idb-cache', () => {
     expect(await getCachedPlaylist()).toEqual({
       channels,
       epgSources: sources,
+      groupLinks: [],
       timestamp: expect.any(Number),
     });
     expect(localStorage.getItem('iptv_cached_playlist')).toBeNull();
+  });
+
+  it('stores linked groups with the playlist and reads them back', async () => {
+    const channels = [channel('ch1')];
+    const links = [{
+      name: 'Group', image: 'http://host/i.png', url: 'http://host/group.w3u',
+      playlistIds: ['p1'], playlistId: 'p1',
+    }];
+
+    expect(await setCachedPlaylist(channels, [], Date.now(), null, links)).toBe(true);
+
+    expect((await getCachedPlaylist(null))?.groupLinks).toEqual(links);
+  });
+
+  it('reads a playlist cached before linked groups existed as no links', async () => {
+    localStorage.setItem(CONFIG.STORAGE_PREFIX + 'playlists', JSON.stringify([
+      { id: 'p1', url: 'http://host/a.m3u' },
+    ]));
+    const signature = playlistCacheToken().signature;
+    const timestamp = Date.now();
+    const db = await openPersistenceDb();
+    const tx = db!.transaction(PLAYLIST_STORE, 'readwrite');
+    tx.objectStore(PLAYLIST_STORE).put({
+      key: 'combined-v4',
+      timestamp,
+      data: {
+        sourceSignature: signature,
+        channels: [channel('ch1')],
+        epgSources: [],
+        timestamp,
+      },
+      expiresAt: null,
+    });
+    await transactionDone(tx);
+
+    const cached = await getCachedPlaylist(null);
+
+    expect(cached?.channels).toHaveLength(1);
+    expect(cached?.groupLinks).toEqual([]);
   });
 
   it('remembers which record a cached playlist or catalog came from', async () => {
@@ -690,6 +731,7 @@ describe('idb-cache', () => {
     expect(await getCachedPlaylist(null)).toEqual({
       channels,
       epgSources: [],
+      groupLinks: [],
       timestamp,
     });
   });

@@ -106,6 +106,24 @@ export interface ManualEpgSource {
   playlistIds: string[];
 }
 
+/** A W3U group that points at another playlist instead of (or in addition to)
+ *  holding stations. Parsing records it; fetching it is a separate step. */
+export interface W3uGroupLink {
+  name: string;
+  image: string;
+  url: string;
+  /** Enclosing W3U folder name when the link is nested. */
+  parentGroup?: string;
+}
+
+/** A linked sub-list exposed by the playlist service. */
+export interface PlaylistGroupLink extends W3uGroupLink {
+  /** Every enabled playlist that declared this link; the first one owns it. */
+  playlistIds: string[];
+  /** The owning playlist's stable id, always `playlistIds[0]`. */
+  playlistId: string;
+}
+
 export interface ParsedPlaylist {
   channels: Channel[];
   groups: string[];
@@ -117,6 +135,8 @@ export interface ParsedPlaylist {
   name?: string;
   format: PlaylistFormat;
   issues: PlaylistParseIssue[];
+  /** Optional so payloads cached before linked groups existed stay valid. */
+  groupLinks?: W3uGroupLink[];
 }
 
 export type PlaylistFormat =

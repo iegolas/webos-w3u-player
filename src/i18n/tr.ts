@@ -537,4 +537,13 @@ export const TR_MESSAGES = {
   'w3u.browserNote': 'Bu içerik kendi web sitesinde oynatılır. İzlemek için TV tarayıcısında açın.',
   'w3u.starting': 'Başlatılıyor…',
   'w3u.browserUnavailable': "TV tarayıcısı açılamadı.",
+  'w3u.linkIdle': "İçeriğini görmek için bu oynatma listesini seçin.",
+  'w3u.linkFailed': "Bu oynatma listesi yüklenemedi.",
+  'w3u.linkFailedNetwork': "Sunucu yanıt vermedi veya isteği engelledi. Tekrar denemek için oynatma listesini seçin.",
+  'w3u.linkFailedParse': "Bu oynatma listesi boş veya uygulamanın okuyamadığı bir biçimde.",
+  'w3u.listTruncated': "{found} içerikten {shown} tanesi gösteriliyor.",
+  'w3u.linkLimit': "Sınıra ulaşıldı",
+  'w3u.linkOpen': "Zaten açık",
+  'w3u.linkLimitHint': "Oynatma listeleri en fazla {count} düzey derine açılır; bu liste kapalı kalır.",
+  'w3u.linkOpenHint': "Bu oynatma listesi buraya gelirken zaten açıldı. Ona dönmek için geri gidin.",
 } as const satisfies MessageCatalog;

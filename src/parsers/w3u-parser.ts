@@ -3,6 +3,7 @@ import type {
   ParsedPlaylist,
   PlaylistFormatDetection,
   PlaylistParseIssue,
+  W3uGroupLink,
 } from '../types';
 import { UNCATEGORIZED_GROUP } from '../types';
 
@@ -40,6 +41,7 @@ const HEADER_KEYS: HeaderKeys = {
 interface ParseContext {
   channels: Channel[];
   groups: Set<string>;
+  groupLinks: W3uGroupLink[];
   issues: PlaylistParseIssue[];
   maxIssues: number;
   maxEntries: number;
@@ -137,6 +139,65 @@ function isJsonSpace(code: number): boolean {
   return code === 32 || code === 9 || code === 10 || code === 13;
 }
 
+type DocumentParse =
+  | { ok: true; value: unknown }
+  | { ok: false; message: string };
+
+/** Accepts JSON that is valid, repairable, or followed by stray bytes: some
+ *  authors leave a duplicated closing brace after the list. */
+function parseDocument(input: string): DocumentParse {
+  const attempts = [stripBom(input), repairW3UJson(input)];
+  let lastError = 'parse failed';
+  for (const attempt of attempts) {
+    try {
+      return { ok: true, value: JSON.parse(attempt) };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : lastError;
+    }
+    const end = endOfFirstJsonValue(attempt);
+    if (end > 0) {
+      try {
+        return { ok: true, value: JSON.parse(attempt.slice(0, end)) };
+      } catch (error) {
+        lastError = error instanceof Error ? error.message : lastError;
+      }
+    }
+  }
+  return { ok: false, message: `W3U document is not valid JSON: ${lastError}` };
+}
+
+/** Index just past the first complete top-level value, or 0 when unbalanced. */
+function endOfFirstJsonValue(text: string): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let started = false;
+  for (let index = 0; index < text.length; index++) {
+    const char = text.charAt(index);
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === '\\') escaped = true;
+      else if (char === '"') inString = false;
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      started = true;
+      continue;
+    }
+    if (char === '{' || char === '[') {
+      depth++;
+      started = true;
+      continue;
+    }
+    if (char === '}' || char === ']') {
+      depth--;
+      if (started && depth === 0) return index + 1;
+    }
+  }
+  return 0;
+}
+
 export function parseW3U(
   input: string,
   sourceUrl = '',
@@ -145,6 +206,7 @@ export function parseW3U(
   const context: ParseContext = {
     channels: [],
     groups: new Set(),
+    groupLinks: [],
     issues: [],
     maxIssues: options.maxIssues ?? MAX_ISSUES,
     maxEntries: options.maxChannels && options.maxChannels > 0
@@ -154,21 +216,12 @@ export function parseW3U(
   };
 
   let document: unknown;
-  try {
-    document = JSON.parse(stripBom(input));
-  } catch {
-    try {
-      document = JSON.parse(repairW3UJson(input));
-    } catch (error) {
-      addIssue(
-        context,
-        'error',
-        'w3u-invalid-json',
-        `W3U document is not valid JSON: ${error instanceof Error ? error.message : 'parse failed'}`,
-      );
-      return finish(undefined, {}, context, sourceUrl);
-    }
+  const parsed = parseDocument(input);
+  if (!parsed.ok) {
+    addIssue(context, 'error', 'w3u-invalid-json', parsed.message);
+    return finish(undefined, {}, context, sourceUrl);
   }
+  document = parsed.value;
 
   const lists = Array.isArray(document) ? document : [document];
   let name = '';
@@ -192,7 +245,7 @@ export function parseW3U(
     }
   }
 
-  if (!context.channels.length && !context.truncated) {
+  if (!context.channels.length && !context.groupLinks.length && !context.truncated) {
     addIssue(context, 'error', 'w3u-empty', 'W3U playlist contains no playable stations');
   }
 
@@ -226,13 +279,42 @@ function walkGroup(
   const before = context.channels.length;
   appendStations(context, raw.stations, name, depth);
   if (context.channels.length > before) context.groups.add(name);
-  else if (!Array.isArray(raw.stations) && readString(raw, 'url')) {
+  // A linked list is ordinary data now; only a usable absolute http(s) URL
+  // can be opened later. Parsing never fetches it, so a link back to an
+  // ancestor (or to this same document) is recorded, not followed.
+  collectGroupLink(context, raw, name, parentGroup);
+}
+
+function collectGroupLink(
+  context: ParseContext,
+  raw: Record<string, unknown>,
+  name: string,
+  parentGroup: string,
+): void {
+  const url = readString(raw, 'url').trim();
+  if (!url) return;
+  if (!isUsablePlaylistUrl(url)) {
     addIssue(
       context,
       'warning',
       'w3u-group-link-unsupported',
-      `Group "${name}" links to another playlist; open it from the source app`,
+      `Group "${name}" links to an unusable playlist url`,
     );
+    return;
+  }
+  const link: W3uGroupLink = { name, image: readString(raw, 'image').trim(), url };
+  if (parentGroup && parentGroup !== name && parentGroup !== UNCATEGORIZED_GROUP) {
+    link.parentGroup = parentGroup;
+  }
+  context.groupLinks.push(link);
+}
+
+function isUsablePlaylistUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
   }
 }
 
@@ -253,6 +335,12 @@ function appendStations(
     }
     if (!isRecord(station)) {
       addIssue(context, 'warning', 'w3u-station-not-object', 'Skipped a W3U station that is not an object');
+      continue;
+    }
+    // Empty objects and text-only spacers are layout, not entries.
+    if (!readString(station, 'name').trim()
+      && !readString(station, 'url').trim()
+      && !Array.isArray(station.stations)) {
       continue;
     }
     // A station that points at another list is a folder too, at any depth.
@@ -359,6 +447,7 @@ function finish(
     issues: context.issues,
   };
   if (name) playlist.name = name;
+  if (context.groupLinks.length) playlist.groupLinks = context.groupLinks;
   return playlist;
 }
 

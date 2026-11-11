@@ -555,6 +555,15 @@ export const EN_MESSAGES = {
   'w3u.browserNote': 'This title plays on its own website. Open it in the TV browser to watch.',
   'w3u.starting': 'Starting…',
   'w3u.browserUnavailable': "Could not open the TV browser.",
+  'w3u.linkIdle': "Select this playlist to see its titles.",
+  'w3u.linkFailed': "Couldn't load this playlist.",
+  'w3u.linkFailedNetwork': "The server did not respond or blocked the request. Select the playlist to try again.",
+  'w3u.linkFailedParse': "This playlist is empty or in a format the app cannot read.",
+  'w3u.listTruncated': "Showing {shown} of {found} titles.",
+  'w3u.linkLimit': "Limit reached",
+  'w3u.linkOpen': "Already open",
+  'w3u.linkLimitHint': "Playlists open up to {count} levels deep, so this one stays closed.",
+  'w3u.linkOpenHint': "This playlist is already open on the way here. Go back to return to it.",
 } as const;
 
 export type MessageKey = keyof typeof EN_MESSAGES;

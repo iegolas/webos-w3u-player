@@ -20,6 +20,9 @@
 }
 .w3u-kicker {
   margin-bottom: 20px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: 22px;
   font-weight: 700;
   letter-spacing: 4px;
@@ -85,6 +88,59 @@
   color: var(--text-primary);
 }
 
+/* A row that opens another playlist: a small cover and a chevron where a
+   group shows its count. */
+.w3u-link-art {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  margin-right: 16px;
+  overflow: hidden;
+  border-radius: 6px;
+  font-size: 20px;
+  color: var(--text-muted);
+  background: var(--bg-secondary);
+}
+.w3u-link-art img {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.w3u-group-more {
+  margin-left: 16px;
+  color: var(--text-muted);
+}
+.w3u-group-link.focused .w3u-group-more,
+.w3u-group-link.active .w3u-group-more { color: var(--text-primary); }
+
+/* A link that cannot be opened (depth limit, or already open above) keeps its
+   row but names why, in place of the chevron. */
+.w3u-group-text {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.w3u-group-text .w3u-group-label {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.w3u-link-tag {
+  display: block;
+  margin-top: 2px;
+  font-size: 18px;
+  color: var(--text-muted);
+}
+.w3u-group-blocked .w3u-link-art { opacity: 0.6; }
+
 /* Pane: the open group's title and poster grid. */
 .w3u-pane {
   display: flex;
@@ -104,10 +160,71 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.w3u-crumbs {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  margin: 0 0 8px;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: 20px;
+  color: var(--text-muted);
+}
+.w3u-crumb {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.w3u-crumb-current { color: var(--text-secondary); }
+.w3u-crumb-sep {
+  width: 18px;
+  height: 18px;
+  margin: 0 8px;
+}
 .w3u-pane-count {
   margin-left: 20px;
   font-size: 26px;
   font-weight: 400;
+  color: var(--text-secondary);
+}
+.w3u-pane-note {
+  flex: 0 0 auto;
+  margin: 0 0 8px;
+  font-size: 20px;
+  color: var(--text-muted);
+}
+
+/* A linked playlist that is loading, failed, or not chosen yet. */
+.w3u-state {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  align-items: flex-start;
+  max-width: 900px;
+  margin-top: 24px;
+}
+.w3u-state-spinner {
+  box-sizing: border-box;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 20px;
+  border: 4px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.w3u-state-title {
+  margin: 0 0 12px;
+  font-size: 28px;
+  line-height: 1.3;
+  color: var(--text-primary);
+}
+.w3u-state-hint {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.4;
   color: var(--text-secondary);
 }
 .w3u-grid {

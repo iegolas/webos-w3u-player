@@ -71,7 +71,7 @@ const log = createLogger('App');
 type ViewName = 'channels' | 'player' | 'epg' | 'settings' | 'parental-controls' | 'reminders'
   | 'loading' | 'movies' | 'series' | 'w3u' | 'search';
 
-class App {
+export class App {
   private views!: Record<ViewName, HTMLElement>;
   private viewStack: ViewName[] = ['channels'];
   private backPressTime = 0;
@@ -167,15 +167,7 @@ class App {
         onEnterManagement: () => this.livePreview?.close(),
       },
     );
-    this.player = new Player(this.views.player, () => {
-      if (this.w3uReturn) {
-        this.showView('w3u');
-        this.w3u.resumeFocus();
-        return;
-      }
-      this.channelList.render();
-      this.showView('channels');
-    }, (idx, catchupStart) => {
+    this.player = new Player(this.views.player, () => this.onPlayerBack(), (idx, catchupStart) => {
       this.channelList.setPlaying(idx, catchupStart);
       if (this.livePreview?.isShowing) this.channelList.render(false);
     },
@@ -897,7 +889,7 @@ class App {
       const xtreamAccounts = playlists
         .filter((playlist) =>
           playlist.source === 'xtream' && playlist.xtream && isSourceEnabled(playlist));
-      this.tabBar.setSections(xtreamAccounts.length > 0, hasW3uLibrary(PlaylistService.channels));
+      this.tabBar.setSections(xtreamAccounts.length > 0, hasW3uLibrary(PlaylistService.channels, PlaylistService.getGroupLinks()));
       this.tabBar.setAccounts(xtreamAccounts, this.activeXtreamAccount()?.id ?? '');
       this.channelList.render();
       this.sidebar.refresh();
@@ -970,7 +962,7 @@ class App {
 
       const hasXtream = StorageService.getPlaylists()
         .some((p) => p.source === 'xtream' && isSourceEnabled(p));
-      this.tabBar.setSections(hasXtream, hasW3uLibrary(PlaylistService.channels));
+      this.tabBar.setSections(hasXtream, hasW3uLibrary(PlaylistService.channels, PlaylistService.getGroupLinks()));
       const xtreamAccounts = StorageService.getPlaylists()
         .filter((p) => p.source === 'xtream' && p.xtream && isSourceEnabled(p));
       this.tabBar.setAccounts(xtreamAccounts, this.activeXtreamAccount()?.id ?? '');
@@ -1070,7 +1062,10 @@ class App {
     this.historyDropdown?.close('view-change');
     if (name !== 'player') this.w3uReturn = false;
     // Leaving the Library abandons a station that is still resolving.
-    if (name !== 'w3u' && name !== 'player') this.w3uResolve?.abort();
+    if (name !== 'w3u' && name !== 'player') {
+      this.w3uResolve?.abort();
+      this.w3u?.abortLoad();
+    }
     this.livePreview?.beforeViewChange(name);
     if (name !== 'channels' && this.channelList.isEditing) this.channelList.exitEditMode();
     // Re-assert the persisted theme on every view transition. This reverts any
@@ -1166,7 +1161,13 @@ class App {
     }
     if (section === 'w3u') {
       this.showView('w3u');
-      this.w3u.open(PlaylistService.channels);
+      const links = PlaylistService.getGroupLinks();
+      // A link back to a root playlist counts as already open.
+      const owners = new Set(links.reduce<string[]>((ids, link) => ids.concat(link.playlistIds), []));
+      const rootUrls = StorageService.getPlaylists()
+        .filter((playlist) => owners.has(playlist.id))
+        .map((playlist) => playlist.url);
+      this.w3u.open(PlaylistService.channels, links, rootUrls);
       return;
     }
     if (section === 'settings') {
@@ -1490,15 +1491,25 @@ class App {
     this.player.play(index, catchup, scope, false);
   }
 
+  private onPlayerBack(): void {
+    if (this.w3uReturn) {
+      this.showView('w3u');
+      this.w3u.resumeFocus();
+      return;
+    }
+    this.channelList.render();
+    this.showView('channels');
+  }
+
   // A W3U station's Play: a resolvable embed page is read through the bundled
   // service and the stream it advertises plays as a live channel. Anything
   // else keeps the old paths: direct media plays at once. The promise settles
   // when a resolve ends, so the Library can show the title as starting.
   private playW3uChannel(channel: Channel): Promise<void> | void {
     const index = PlaylistService.indexOf(channel);
-    if (index < 0) return;
     if (classifyStation(channel) !== 'resolvable') {
-      this.startW3uChannel(index);
+      if (index >= 0) this.startW3uChannel(index);
+      else this.startDetachedW3uChannel(channel);
       return;
     }
     this.w3uResolve?.abort();
@@ -1510,20 +1521,22 @@ class App {
         // A Back out of the Library abandons the attempt, whatever it returns.
         if (controller.signal.aborted) return;
         if (result.ok) {
+          const source = { url: result.url, headers: result.headers };
           // A playlist refresh while resolving may have renumbered the list.
           const current = PlaylistService.indexOf(channel);
-          if (current >= 0) {
-            this.player.play(current, undefined, null, false, {
-              url: result.url,
-              headers: result.headers,
-            });
-            this.w3uReturn = true;
-          }
+          if (current >= 0) this.player.play(current, undefined, null, false, source);
+          else this.player.playChannel(channel, undefined, source);
+          this.w3uReturn = true;
           return;
         }
         if (result.reason === 'aborted') return;
         this.openStationInBrowser(channel.url);
       });
+  }
+
+  private startDetachedW3uChannel(channel: Channel): void {
+    this.player.playChannel(channel);
+    this.w3uReturn = true;
   }
 
   private startW3uChannel(index: number): void {

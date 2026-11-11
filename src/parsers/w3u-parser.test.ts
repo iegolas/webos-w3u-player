@@ -218,10 +218,95 @@ describe('w3u hardening', () => {
     expect(result.groups).toEqual(['Season 1']);
   });
 
-  it('reports a group that links to another list instead of dropping it silently', () => {
-    const doc = JSON.stringify({ groups: [{ name: 'Linked', url: 'http://host/other.w3u' }] });
+  it('collects a group that links to another playlist', () => {
+    const doc = JSON.stringify({
+      groups: [{ name: 'Linked', image: 'http://host/link.png', url: 'http://host/other.w3u' }],
+    });
+    const result = parseW3U(doc);
+    expect(result.groupLinks).toEqual([
+      { name: 'Linked', image: 'http://host/link.png', url: 'http://host/other.w3u' },
+    ]);
+    expect(result.channels).toHaveLength(0);
+    expect(result.issues.some(i => i.code === 'w3u-group-link-unsupported')).toBe(false);
+    expect(result.issues.some(i => i.code === 'w3u-empty')).toBe(false);
+  });
+
+  it('keeps the children of a linked group that also nests lists', () => {
+    const doc = JSON.stringify({
+      groups: [{
+        name: 'Linked folder',
+        url: 'http://host/folder.w3u',
+        groups: [{ name: 'Season 1', stations: [{ name: 'Ep 1', url: 'http://host/e1.mp4' }] }],
+      }],
+    });
+    const result = parseW3U(doc);
+    expect(result.channels.map(channel => channel.name)).toEqual(['Ep 1']);
+    expect(result.channels[0].group).toBe('Season 1');
+    expect(result.groupLinks).toEqual([
+      { name: 'Linked folder', image: '', url: 'http://host/folder.w3u' },
+    ]);
+  });
+
+  it('does not follow a link that repeats its parent url', () => {
+    const doc = JSON.stringify({
+      groups: [{
+        name: 'Root',
+        url: 'http://host/same.w3u',
+        groups: [{ name: 'Child', url: 'http://host/same.w3u' }],
+      }],
+    });
+    const result = parseW3U(doc);
+    expect(result.groupLinks).toHaveLength(2);
+    expect(result.channels).toHaveLength(0);
+  });
+
+  it('keeps the stations and the link of a group that has both', () => {
+    const doc = JSON.stringify({
+      groups: [{
+        name: 'Mixed',
+        url: 'http://host/mixed.w3u',
+        stations: [{ name: 'One', url: 'http://host/one.mp4' }],
+      }],
+    });
+    const result = parseW3U(doc);
+    expect(result.channels.map(channel => channel.name)).toEqual(['One']);
+    expect(result.groupLinks).toEqual([
+      { name: 'Mixed', image: '', url: 'http://host/mixed.w3u' },
+    ]);
+  });
+
+  it('records a nested group link with its parent folder', () => {
+    const doc = JSON.stringify({
+      groups: [{
+        name: 'Folder',
+        groups: [{ name: 'Season 1', url: 'http://host/season.w3u' }],
+      }],
+    });
+    const result = parseW3U(doc);
+    expect(result.groupLinks).toEqual([
+      { name: 'Season 1', image: '', url: 'http://host/season.w3u', parentGroup: 'Folder' },
+    ]);
+  });
+
+  it('parses two groups pointing at each other without recursing', () => {
+    const doc = JSON.stringify({
+      groups: [
+        { name: 'Alpha', url: 'http://host/bravo.w3u' },
+        { name: 'Bravo', url: 'http://host/alpha.w3u' },
+      ],
+    });
     const result = parseW3U(doc);
     expect(result.channels).toHaveLength(0);
+    expect(result.groupLinks?.map(link => link.url)).toEqual([
+      'http://host/bravo.w3u',
+      'http://host/alpha.w3u',
+    ]);
+  });
+
+  it('still reports a link with an unusable scheme', () => {
+    const doc = JSON.stringify({ groups: [{ name: 'Bad', url: 'ftp://host/x.w3u' }] });
+    const result = parseW3U(doc);
+    expect(result.groupLinks).toBeUndefined();
     expect(result.issues.some(i => i.code === 'w3u-group-link-unsupported')).toBe(true);
   });
 
@@ -261,5 +346,21 @@ describe('w3u hardening', () => {
     const result = parser.finish();
     expect(result.channels).toHaveLength(0);
     expect(result.issues.some(i => i.code === 'wrong-format')).toBe(true);
+  });
+});
+
+describe('real-world tolerance', () => {
+  it('ignores bytes after the first complete document', () => {
+    const doc = '{"stations":[{"name":"S","url":"http://host/a.mp4"}]} }';
+    const result = parseW3U(doc);
+    expect(result.channels).toHaveLength(1);
+    expect(result.issues.some(i => i.code === 'w3u-invalid-json')).toBe(false);
+  });
+
+  it('skips empty layout entries without reporting them', () => {
+    const doc = '{"stations":[{},{"text-align":"center"},{"name":"S","url":"http://host/a.mp4"}]}';
+    const result = parseW3U(doc);
+    expect(result.channels).toHaveLength(1);
+    expect(result.issues).toHaveLength(0);
   });
 });

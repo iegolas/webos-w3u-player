@@ -5,6 +5,7 @@ import {
   type EpgSource,
   type LastChannel,
   type ParsedPlaylist,
+  type PlaylistGroupLink,
   type PlaylistTab,
 } from '../types';
 import { fetchAndParseM3U } from '../parsers/m3u-loader';
@@ -88,6 +89,19 @@ function usableDirectSource(value: string): string {
   }
 }
 
+function enabledGroupLinks(
+  links: readonly PlaylistGroupLink[],
+  enabledIds: Set<string>,
+): PlaylistGroupLink[] {
+  const kept: PlaylistGroupLink[] = [];
+  for (const link of links) {
+    const playlistIds = link.playlistIds.filter(id => enabledIds.has(id));
+    if (!playlistIds.length) continue;
+    kept.push({ ...link, playlistIds, playlistId: playlistIds[0] });
+  }
+  return kept;
+}
+
 function xtreamLivePlaylist(
   credentials: XtreamCredentials,
   output: XtreamLiveOutput,
@@ -139,6 +153,9 @@ class PlaylistServiceImpl {
   private channelSourceIndices = new Uint32Array(0);
   groups: string[] = [];
   groupsRevision = 0;
+  /** Linked W3U sub-lists from enabled playlists, de-duplicated by url. */
+  groupLinks: PlaylistGroupLink[] = [];
+  groupLinksRevision = 0;
   playlistTabs: PlaylistTab[] = [];
   epgSources: EpgSource[] = [];
   private indexMap = new Map<Channel, number>(); // channel -> global index, O(1) indexOf
@@ -253,6 +270,8 @@ class PlaylistServiceImpl {
     this.channelSourceIndices = new Uint32Array(0);
     this.groups = [];
     this.groupsRevision++;
+    this.groupLinks = [];
+    this.groupLinksRevision++;
     this.playlistTabs = [];
     this.epgSources = [];
     this.indexMap = new Map();
@@ -305,6 +324,7 @@ class PlaylistServiceImpl {
             }))
             .filter(source => source.playlistIds.length > 0)
         : cached.epgSources;
+      this.setGroupLinks(enabledGroupLinks(cached.groupLinks ?? [], enabledIds));
       log.info('Cache hit:', this.allChannels.length, 'channels,', this.epgSources.length, 'epg sources');
       this.applyCustomization();
       this.buildPlaylistTabs();
@@ -333,6 +353,8 @@ class PlaylistServiceImpl {
 
     const allChannels: Channel[] = [];
     const byUrl = new Map<string, Channel>();
+    const groupLinks: PlaylistGroupLink[] = [];
+    const groupLinkByUrl = new Map<string, PlaylistGroupLink>();
     const epgSources: EpgSource[] = [];
     let failedPlaylists = 0;
     const failedSourceIds = new Set<string>();
@@ -551,6 +573,25 @@ class PlaylistServiceImpl {
           }
         }
         log.debug(`Added ${added} channels (${dupes} duplicates skipped)`);
+        // Linked sub-lists merge like channels: one entry per url across the
+        // enabled sources, owned by the first playlist that declared it.
+        for (const link of parsed.groupLinks ?? []) {
+          const existing = groupLinkByUrl.get(link.url);
+          if (existing) {
+            if (!existing.playlistIds.includes(plKey)) existing.playlistIds.push(plKey);
+            continue;
+          }
+          const entry: PlaylistGroupLink = {
+            name: link.name,
+            image: link.image,
+            url: link.url,
+            playlistIds: [plKey],
+            playlistId: plKey,
+          };
+          if (link.parentGroup) entry.parentGroup = link.parentGroup;
+          groupLinkByUrl.set(link.url, entry);
+          groupLinks.push(entry);
+        }
         if (pl.source === 'xtream' && pl.xtream) {
           // The panel's own XMLTV endpoint; the get.php url-tvg (if any) is added below too.
           const epg = xtreamEpgUrl({ baseUrl: pl.url, ...pl.xtream });
@@ -623,6 +664,7 @@ class PlaylistServiceImpl {
     const refreshTimestamp = Date.now();
     this.allChannels = allChannels;
     this.epgSources = epgSources;
+    this.setGroupLinks(groupLinks);
     // Customization preserves source names/groups on each channel, so cached
     // channels can be re-customized after an edit without another network load.
     if (!failedPlaylists) {
@@ -633,6 +675,7 @@ class PlaylistServiceImpl {
         refreshTimestamp,
         StorageService.getPlaylistRefreshIntervalMs(),
         cacheToken,
+        groupLinks,
       );
     } else {
       this.refreshTimestamp = null;
@@ -924,6 +967,18 @@ class PlaylistServiceImpl {
     // stale/desynced channel cache can never blank out the tab bar.
     const configured = StorageService.getPlaylists().filter(isSourceEnabled);
     this.playlistTabs = configured.map(pl => ({ id: pl.id, name: pl.name || pl.url }));
+  }
+
+  private setGroupLinks(links: PlaylistGroupLink[]): void {
+    this.groupLinks = links;
+    this.groupLinksRevision++;
+  }
+
+  /** Linked W3U sub-lists across the enabled sources, de-duplicated by url.
+   *  `playlist` scopes the result to one playlist tab. */
+  getGroupLinks(playlist?: string): PlaylistGroupLink[] {
+    if (!playlist) return this.groupLinks.slice();
+    return this.groupLinks.filter(link => link.playlistIds.includes(playlist));
   }
 
   getByGroup(group: ChannelGroupId, playlist?: string): Channel[] {

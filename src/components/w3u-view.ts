@@ -1,4 +1,4 @@
-import type { Action, Channel } from '../types';
+import type { Action, Channel, PlaylistGroupLink } from '../types';
 import { Focus, type FocusScope, type Via } from '../navigation/focus-scope';
 import { FocusRing, ringShown } from '../navigation/focus-ring';
 import { InputMode } from '../navigation/input-mode';
@@ -10,8 +10,22 @@ import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
 import { CONFIG } from '../config';
 import { t, tp } from '../i18n';
-import { GLOBE_ICON, PLAY_ICON } from './icons';
-import { buildW3uLibrary, type W3uGroup, type W3uLibrary, type W3uStation } from './w3u-model';
+import { CHEVRON_RIGHT_ICON, GLOBE_ICON, PLAY_ICON } from './icons';
+import {
+  buildW3uLibrary,
+  canonicalUrl,
+  classifyLinkFailure,
+  cutOf,
+  linkRows,
+  stationCount,
+  W3uLinkLoader,
+  W3U_LINK_LIMITS,
+  type LinkedList,
+  type LinkFailure,
+  type W3uCut,
+  type W3uGroup,
+  type W3uStation,
+} from './w3u-model';
 
 // Geometry mirrors css/w3u-view.css: .catalog-grid-cell is 220x371 and a grid
 // row is 395px; a .w3u-group row is 76px plus its 8px gap.
@@ -56,22 +70,47 @@ export interface W3uHandlers {
   onOpenInBrowser: (station: W3uStation) => void;
 }
 
+interface Level {
+  label: string;
+  // The address of the playlist this level lists; null for the Library root.
+  url: string | null;
+  groups: W3uGroup[];
+  groupIndex: number;
+  gridFocus: number;
+  groupScroll: number;
+  gridScroll: number;
+  cut: W3uCut | null;
+}
+
+function newLevel(label: string, url: string | null, groups: W3uGroup[], cut: W3uCut | null = null): Level {
+  return { label, url, groups, groupIndex: 0, gridFocus: 0, groupScroll: 0, gridScroll: 0, cut };
+}
+
 // The W3U Library: a group list beside a poster grid of that group's titles,
 // and a detail screen with a Play / Open in TV browser action. Play on a
 // resolvable embed shows "Starting…" on the button until the host settles. One focus scope
 // holds the focused group row, poster, or button; keys are plain indexes
 // (`g:2`, `t:15`, `d:action`) because only the active group's grid exists.
-// Back walks detail -> grid -> group list -> Live. Both layers stay in the DOM
-// (the hidden one only invisible), so Back finds the grid exactly as it was.
+// A group row can link to another playlist: choosing it fetches that list
+// then (never before) and shows its titles in the same grid. A list that
+// has several groups or links of its own becomes one more level, whose rail
+// replaces the current one. Back walks detail -> grid -> group list -> the
+// level above -> Live. Both layers stay in the DOM (the hidden one only
+// invisible), so Back finds the grid exactly as it was.
 export class W3uView {
   readonly focusScope: FocusScope;
-  private library: W3uLibrary = { groups: [], total: 0 };
+  private levels: Level[] = [newLevel('', null, [])];
   private source: readonly Channel[] | null = null;
+  private linksKey = '';
+  // The addresses of the root playlists, open from the start.
+  private rootPath = new Set<string>();
   private mode: Mode = 'library';
-  private groupIndex = 0;
-  private gridFocus = 0;
   private detail: W3uStation | null = null;
   private detailReturn = 0;
+  // The linked playlist being fetched, and why earlier fetches failed.
+  private pending: { url: string; group: W3uGroup } | null = null;
+  private readonly failures = new Map<string, LinkFailure>();
+  private readonly loader = new W3uLinkLoader();
   // The station whose Play is still starting, and the attempt it belongs to.
   private starting: W3uStation | null = null;
   private startAttempt = 0;
@@ -127,15 +166,23 @@ export class W3uView {
     container.addEventListener('scroll', (e: Event) => this.onScroll(e.target as HTMLElement), true);
   }
 
-  // Shows the Library for these channels, keeping the viewer's place when the
-  // channel list is the one already shown.
-  open(channels: readonly Channel[]): void {
-    if (channels !== this.source) {
+  // Shows the Library for these channels and linked playlists, keeping the
+  // viewer's place when they are the ones already shown. Nothing is fetched
+  // here; a linked playlist loads when the viewer chooses it.
+  open(
+    channels: readonly Channel[],
+    links: readonly PlaylistGroupLink[] = [],
+    rootUrls: readonly string[] = [],
+  ): void {
+    const linksKey = links.map((link) => link.url).join('\n') + '\n' + rootUrls.join('\n');
+    if (channels !== this.source || linksKey !== this.linksKey) {
       this.source = channels;
-      this.library = buildW3uLibrary(channels);
+      this.linksKey = linksKey;
+      this.dropPending();
+      this.failures.clear();
+      this.rootPath = new Set(rootUrls.map(canonicalUrl));
+      this.levels = [newLevel('', null, buildW3uLibrary(channels, links, rootUrls).groups)];
       this.mode = 'library';
-      this.groupIndex = 0;
-      this.gridFocus = 0;
       this.detail = null;
       this.cancelStart();
       this.gridVirtualizer.setScrollOffset(0);
@@ -156,6 +203,14 @@ export class W3uView {
     this.focusScope.focus(this.focusScope.focusKey, 'resume');
   }
 
+  // Leaving the Library (or a different list replacing it) drops a fetch in
+  // flight: its result is ignored and the pane no longer says it is loading.
+  abortLoad(): void {
+    const had = this.pending !== null;
+    this.dropPending();
+    if (had && this.mode === 'library') this.renderLibrary();
+  }
+
   handleAction(action: Action): void {
     if (isFocusMove(action) && this.ringHidden()) {
       this.request(this.focusScope.focusKey, 'key');
@@ -167,7 +222,7 @@ export class W3uView {
     }
     const focused = parseKey(this.focusScope.focusKey);
     if (!focused || focused.region === 'detail') {
-      if (action === 'back') this.handlers.onBack();
+      if (action === 'back') this.backFromRail();
       else if (isFocusMove(action) || action === 'select') this.request(this.defaultKey(), 'key');
       return;
     }
@@ -177,16 +232,47 @@ export class W3uView {
 
   // --- model ---
 
+  private get level(): Level {
+    return this.levels[this.levels.length - 1];
+  }
+
+  private get groups(): W3uGroup[] {
+    return this.level.groups;
+  }
+
+  private get groupIndex(): number {
+    return this.level.groupIndex;
+  }
+
+  private get gridFocus(): number {
+    return this.level.gridFocus;
+  }
+
   private get group(): W3uGroup | null {
-    return this.library.groups[this.groupIndex] ?? null;
+    return this.groups[this.groupIndex] ?? null;
   }
 
   private get stations(): W3uStation[] {
     return this.group?.stations ?? [];
   }
 
-  private groupLabel(group: W3uGroup): string {
-    return group.uncategorized ? t('channel.uncategorized') : group.label;
+  // A row with no usable name is numbered; its address is never shown.
+  private groupLabel(group: W3uGroup, index = this.groups.indexOf(group)): string {
+    if (group.uncategorized) return t('channel.uncategorized');
+    return group.label || t('settings.playlistDefault', { number: index + 1 });
+  }
+
+  // Where the pane's titles sit: the Library, each playlist opened on the way
+  // here, and the open playlist itself when it fills the pane.
+  private crumbs(active: W3uGroup | null): string[] {
+    const trail = this.levels.slice(1).map((level) => level.label);
+    if (active?.link?.ready) trail.push(this.groupLabel(active));
+    return trail.length ? [t('nav.w3u')].concat(trail) : [];
+  }
+
+  private dropPending(): void {
+    this.loader.abort();
+    this.pending = null;
   }
 
   // --- focus ---
@@ -206,13 +292,13 @@ export class W3uView {
     if (!parsed) return false;
     if (parsed.region === 'detail') return this.mode === 'detail';
     if (this.mode !== 'library') return false;
-    return parsed.index < (parsed.region === 'group' ? this.library.groups.length : this.stations.length);
+    return parsed.index < (parsed.region === 'group' ? this.groups.length : this.stations.length);
   }
 
   private defaultKey(): string | null {
     if (this.mode === 'detail') return DETAIL_KEY;
     if (this.stations.length) return `t:${Math.min(this.gridFocus, this.stations.length - 1)}`;
-    return this.library.groups.length ? `g:${this.groupIndex}` : null;
+    return this.groups.length ? `g:${this.groupIndex}` : null;
   }
 
   // A render that settles focus on its own: with the keys it may bring it into
@@ -226,7 +312,7 @@ export class W3uView {
   // the scope just follows it, so no reveal waits for later.
   private request(key: string | null, via: Via | null): void {
     const parsed = parseKey(key);
-    if (parsed?.region === 'tile') this.gridFocus = parsed.index;
+    if (parsed?.region === 'tile') this.level.gridFocus = parsed.index;
     if (via === 'pointer' && Focus.owner() !== this.focusScope) {
       this.focusScope.focus(key, via);
       return;
@@ -282,29 +368,137 @@ export class W3uView {
         else this.handlers.onRevealTabBar();
         return;
       case 'down':
-        if (index < this.library.groups.length - 1) this.request(`g:${index + 1}`, 'key');
+        if (index < this.groups.length - 1) this.request(`g:${index + 1}`, 'key');
         return;
       case 'right':
       case 'select':
         this.chooseGroup(index);
         return;
       case 'back':
-        this.handlers.onBack();
+        this.backFromRail();
         return;
       default:
         return;
     }
   }
 
+  // Back from a group list goes up one playlist level, and out of the Library
+  // from the root.
+  private backFromRail(): void {
+    if (this.levels.length > 1) this.popLevel();
+    else this.handlers.onBack();
+  }
+
   // Selecting a group shows its grid and hands the keys to the first poster.
+  // A linked playlist is fetched first, and shows its state while it loads.
   private chooseGroup(index: number): void {
+    const group = this.groups[index];
+    if (!group) return;
+    if (this.pending && this.pending.group !== group) this.dropPending();
     if (index !== this.groupIndex) {
-      this.groupIndex = index;
-      this.gridFocus = 0;
+      this.level.groupIndex = index;
+      this.level.gridFocus = 0;
       this.gridVirtualizer.setScrollOffset(0);
       this.renderLibrary();
     }
+    if (group.link && !group.link.ready) {
+      if (!group.link.blocked) this.openLink(group);
+      return;
+    }
     if (this.stations.length) this.request('t:0', 'key');
+  }
+
+  // --- linked playlists ---
+
+  private openLink(group: W3uGroup): void {
+    const link = group.link;
+    if (!link || link.blocked || this.pending?.group === group) return;
+    const key = canonicalUrl(link.url);
+    this.failures.delete(key);
+    this.releaseOtherLists(group);
+    const cached = this.loader.get(link.url);
+    if (cached) {
+      this.dropPending();
+      this.applyList(group, cached);
+      return;
+    }
+    this.pending = { url: key, group };
+    this.renderLibrary();
+    // Room left for titles once the lists on the way here are counted.
+    const room = W3U_LINK_LIMITS.MAX_TOTAL_STATIONS - this.levels.reduce(
+      (sum, level) => sum + stationCount(level.groups),
+      0,
+    );
+    this.loader.load(link.url, room).then(
+      (list) => {
+        if (!list || this.pending?.group !== group) return;
+        this.pending = null;
+        this.applyList(group, list);
+      },
+      (error: unknown) => {
+        if (this.pending?.group !== group) return;
+        this.pending = null;
+        this.failures.set(key, classifyLinkFailure(error));
+        this.renderLibrary();
+      },
+    );
+  }
+
+  // Titles of a playlist the viewer left stay in the cache, not on the screen.
+  private releaseOtherLists(keep: W3uGroup): void {
+    for (const other of this.groups) {
+      if (other === keep || !other.link?.ready) continue;
+      other.stations = [];
+      other.link.ready = false;
+      other.link.cut = null;
+    }
+  }
+
+  // A list with one group and no links of its own fills the row's own grid.
+  // Anything more becomes the next level. A link to a playlist already open
+  // on the way here stays as an 'open' row, and the links of a list at the
+  // depth limit as 'limit' rows; neither is fetched.
+  private applyList(group: W3uGroup, list: LinkedList): void {
+    const link = group.link;
+    if (!link) return;
+    const path = new Set<string>(this.rootPath);
+    path.add(canonicalUrl(link.url));
+    this.levels.forEach((level) => { if (level.url) path.add(canonicalUrl(level.url)); });
+    const nested = linkRows(list.links, path, this.levels.length >= W3U_LINK_LIMITS.MAX_DEPTH);
+    if (list.groups.length <= 1 && nested.length === 0) {
+      const stations = list.groups[0]?.stations ?? [];
+      if (!stations.length) {
+        this.failures.set(canonicalUrl(link.url), 'parse');
+        this.renderLibrary();
+        return;
+      }
+      group.stations = stations;
+      link.ready = true;
+      link.cut = cutOf(list);
+      const row = this.groups.indexOf(group);
+      const onRow = this.focusScope.focusKey === `g:${row}`;
+      this.renderLibrary();
+      if (onRow) this.request('t:0', this.placementVia() ?? 'key');
+      return;
+    }
+    this.level.groupScroll = this.groupVirtualizer.scrollOffset;
+    this.level.gridScroll = this.gridVirtualizer.scrollOffset;
+    this.levels.push(newLevel(this.groupLabel(group, this.groups.indexOf(group)), link.url, list.groups.concat(nested), cutOf(list)));
+    this.groupVirtualizer.setScrollOffset(0);
+    this.gridVirtualizer.setScrollOffset(0);
+    this.renderLibrary();
+    this.request('g:0', this.placementVia());
+  }
+
+  private popLevel(): void {
+    if (this.levels.length < 2) return;
+    this.dropPending();
+    this.levels.pop();
+    const parent = this.level;
+    this.groupVirtualizer.setScrollOffset(parent.groupScroll);
+    this.gridVirtualizer.setScrollOffset(parent.gridScroll);
+    this.renderLibrary();
+    this.request(`g:${parent.groupIndex}`, 'back');
   }
 
   private tileAction(action: Action, index: number): void {
@@ -452,9 +646,11 @@ export class W3uView {
   // `followView`: the windows follow a scroll the viewer made, so the
   // scrollers keep their own offsets.
   private renderLibrary(instant = false, followView = false): void {
-    const groups = this.library.groups;
+    const groups = this.groups;
     const active = this.group;
     const stations = this.stations;
+    const crumbs = this.crumbs(active);
+    const cut = stations.length ? active?.link?.cut ?? this.level.cut : null;
     const grid = this.gridElements();
     const list = this.listElements();
 
@@ -482,15 +678,17 @@ export class W3uView {
     morph(this.layers.library, html`
       <div class="w3u-library" data-nav-container>
         <nav class="w3u-rail">
-          <div class="w3u-kicker">${t('nav.w3u')}</div>
+          <div class="w3u-kicker">${this.levels.length > 1 ? this.level.label : t('nav.w3u')}</div>
           <div class="w3u-group-list">
             <div class="w3u-group-spacer" style="height:${this.groupVirtualizer.getTotalSize(groups.length)}px">${rows}</div>
           </div>
         </nav>
         <section class="w3u-pane">
+          ${crumbs.length ? html`<nav class="w3u-crumbs">${crumbs.map((crumb, index) => html`${index ? html`<span class="w3u-glyph w3u-crumb-sep">${raw(CHEVRON_RIGHT_ICON)}</span>` : ''}<span class="w3u-crumb${index === crumbs.length - 1 ? ' w3u-crumb-current' : ''}">${crumb}</span>`)}</nav>` : ''}
           <h1 class="w3u-pane-title">${active ? this.groupLabel(active) : t('nav.w3u')}
-            <span class="w3u-pane-count">${tp('w3u.titleCount', stations.length)}</span></h1>
-          ${stations.length === 0 ? '' : html`
+            ${stations.length || !active?.link ? html`<span class="w3u-pane-count">${tp('w3u.titleCount', stations.length)}</span>` : ''}</h1>
+          ${cut ? html`<p class="w3u-pane-note">${t('w3u.listTruncated', { shown: cut.shown, found: cut.found })}</p>` : ''}
+          ${stations.length === 0 ? this.paneState(active) : html`
             <div class="w3u-grid">
               <div class="catalog-grid-track"
                    style="height:${this.gridVirtualizer.getTotalSize(stations.length, viewportWidth)}px">${cells}</div>
@@ -505,6 +703,40 @@ export class W3uView {
     this.syncScroll(after.list.view, after.list.track, this.groupVirtualizer.scrollOffset, instant);
   }
 
+  // What the pane says when the open row has no titles to show: a linked
+  // playlist that is loading, failed, or not chosen yet. A plain group stays blank.
+  private paneState(group: W3uGroup | null): Safe | string {
+    const link = group?.link;
+    if (!group || !link) return '';
+    if (link.blocked) {
+      return html`
+        <div class="w3u-state">
+          <p class="w3u-state-hint">${link.blocked === 'limit'
+            ? t('w3u.linkLimitHint', { count: W3U_LINK_LIMITS.MAX_DEPTH })
+            : t('w3u.linkOpenHint')}</p>
+        </div>`;
+    }
+    if (this.pending?.group === group) {
+      return html`
+        <div class="w3u-state" role="status">
+          <div class="w3u-state-spinner"></div>
+          <p class="w3u-state-title">${t('common.loading')}</p>
+        </div>`;
+    }
+    const failure = this.failures.get(canonicalUrl(link.url));
+    if (failure) {
+      return html`
+        <div class="w3u-state" role="status">
+          <p class="w3u-state-title">${t('w3u.linkFailed')}</p>
+          <p class="w3u-state-hint">${t(failure === 'parse' ? 'w3u.linkFailedParse' : 'w3u.linkFailedNetwork')}</p>
+        </div>`;
+    }
+    return html`
+      <div class="w3u-state">
+        <p class="w3u-state-hint">${t('w3u.linkIdle')}</p>
+      </div>`;
+  }
+
   private syncScroll(view: HTMLElement | null, track: HTMLElement | null, offset: number, instant: boolean): void {
     if (!view) return;
     this.scrollGuard.syncOffset(view, 'vertical', offset === 0 ? 0 : offset + this.trackStart(view, track), instant);
@@ -517,10 +749,35 @@ export class W3uView {
   }
 
   private groupRow(group: W3uGroup, index: number, active: boolean): Safe {
+    const link = group.link;
+    if (link) {
+      const label = this.groupLabel(group, index);
+      const art = html`<span class="w3u-link-art">${label.charAt(0)}${link.image ? html`<img src="${link.image}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}</span>`;
+      if (link.blocked) {
+        return html`
+          <div class="w3u-group w3u-group-link w3u-group-blocked${active ? ' active' : ''}" data-focusable data-key="g:${index}"
+               style="top:${index * GROUP_ROW_STRIDE}px">
+            ${art}
+            <span class="w3u-group-text">
+              <span class="w3u-group-label">${label}</span>
+              <span class="w3u-link-tag">${t(link.blocked === 'limit' ? 'w3u.linkLimit' : 'w3u.linkOpen')}</span>
+            </span>
+          </div>
+        `;
+      }
+      return html`
+        <div class="w3u-group w3u-group-link${active ? ' active' : ''}" data-focusable data-key="g:${index}"
+             style="top:${index * GROUP_ROW_STRIDE}px">
+          ${art}
+          <span class="w3u-group-label">${label}</span>
+          <span class="w3u-group-more w3u-glyph">${raw(CHEVRON_RIGHT_ICON)}</span>
+        </div>
+      `;
+    }
     return html`
       <div class="w3u-group${active ? ' active' : ''}" data-focusable data-key="g:${index}"
            style="top:${index * GROUP_ROW_STRIDE}px">
-        <span class="w3u-group-label">${this.groupLabel(group)}</span>
+        <span class="w3u-group-label">${this.groupLabel(group, index)}</span>
         <span class="w3u-group-count">${group.stations.length}</span>
       </div>
     `;

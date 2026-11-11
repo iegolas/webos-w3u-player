@@ -551,4 +551,13 @@ export const IT_MESSAGES = {
   'w3u.browserNote': 'Questo titolo viene riprodotto sul suo sito web. Aprilo nel browser della TV per guardarlo.',
   'w3u.starting': 'Avvio…',
   'w3u.browserUnavailable': "Impossibile aprire il browser del televisore.",
+  'w3u.linkIdle': "Seleziona questa playlist per vedere i suoi titoli.",
+  'w3u.linkFailed': "Impossibile caricare questa playlist.",
+  'w3u.linkFailedNetwork': "Il server non ha risposto o ha bloccato la richiesta. Seleziona la playlist per riprovare.",
+  'w3u.linkFailedParse': "Questa playlist è vuota o in un formato che l'app non riesce a leggere.",
+  'w3u.listTruncated': "Vengono mostrati {shown} titoli su {found}.",
+  'w3u.linkLimit': "Limite raggiunto",
+  'w3u.linkOpen': "Già aperta",
+  'w3u.linkLimitHint': "Le playlist si aprono fino a {count} livelli di profondità, quindi questa resta chiusa.",
+  'w3u.linkOpenHint': "Questa playlist è già aperta lungo il percorso. Torna indietro per ritornarci.",
 } satisfies MessageCatalog;

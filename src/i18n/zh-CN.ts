@@ -537,4 +537,13 @@ export const ZH_CN_MESSAGES = {
   'w3u.browserNote': '此内容需在其所在网页播放。请在电视浏览器中打开观看。',
   'w3u.starting': '正在启动…',
   'w3u.browserUnavailable': "无法打开电视浏览器。",
+  'w3u.linkIdle': "选择此播放列表以查看其中的内容。",
+  'w3u.linkFailed': "无法加载此播放列表。",
+  'w3u.linkFailedNetwork': "服务器未响应或拒绝了请求。请重新选择该播放列表重试。",
+  'w3u.linkFailedParse': "此播放列表为空，或使用了应用无法读取的格式。",
+  'w3u.listTruncated': "共 {found} 项，显示前 {shown} 项。",
+  'w3u.linkLimit': "已达上限",
+  'w3u.linkOpen': "已打开",
+  'w3u.linkLimitHint': "播放列表最多可打开 {count} 层，因此此列表保持关闭。",
+  'w3u.linkOpenHint': "此播放列表已在当前路径中打开。返回即可回到该列表。",
 } satisfies MessageCatalog;
