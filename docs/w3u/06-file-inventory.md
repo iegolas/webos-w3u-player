@@ -7,7 +7,7 @@ file onto a newer main.
 
 | File | Purpose |
 | --- | --- |
-| `src/parsers/w3u-parser.ts` | W3U parsing, repair, detection, streaming sink |
+| `src/parsers/w3u-parser.ts` | W3U parsing, repair, detection, streaming sink; marks every station `w3u-station` so the Library tab cannot be hidden by a metadata-free list |
 | `src/parsers/w3u-parser.test.ts` | 36 tests for the above |
 | `src/components/w3u-model.ts` | Library model, station kinds, link loader, limits |
 | `src/components/w3u-view.ts` | Library view: rail, poster grid, detail, pins |
@@ -15,9 +15,10 @@ file onto a newer main.
 | `css/w3u-view.css` | Library styles, pin chip |
 | `src/utils/stream-url-classifier.ts` (+ test) | media / embed / unknown |
 | `src/services/browser-launch.ts` (+ test) | open a URL in the TV browser |
-| `src/services/embed-resolver.ts` (+ test) | embed page → direct stream via the service |
+| `src/services/embed-resolver.ts` (+ test) | embed page → stream via the service (TV) or the preview bridge; generic extraction + XOR payload decoder |
 | `src/app.test.ts` | app-level routing tests (detached play, overlay, Guide) |
 | `docs/DEVICE.md` | Developer Mode install for this fork's app id |
+| `scripts/hls-proxy.mjs` (+ test) | preview-only HLS relay (`/__hls`): URI rewrite, Referer/Origin, Range |
 | `PLAN.md` | early design notes and measured findings (historical) |
 
 ## Deleted (1)
@@ -45,8 +46,8 @@ file onto a newer main.
 
 | File | Change |
 | --- | --- |
-| `src/app.ts` | W3U section wiring, detached playback, embed resolution, pin callbacks, overlay load, Guide guards, `epgSources()` |
-| `src/components/channel-list.ts` (+ test) | All-list group prefix, Live pin marker + unpin chip |
+| `src/app.ts` | W3U section wiring, detached playback, embed resolution **also for indexed/Live playback** (`playChannel`), pin callbacks, overlay load, Guide guards, `epgSources()` |
+| `src/components/channel-list.ts` (+ test) | All-list group prefix, Live pin marker + unpin chip, display-text cleaning for group/channel labels |
 | `src/components/channel-list-editor.test.ts` | expectations for prefixed rows in edit/favourites modes |
 | `src/components/tab-bar.ts` (+ test) | optional Guide section (`setSections(..., showGuide)`) |
 | `src/components/settings.ts` (+ test) | playlist-entry focus fix, Show Guide tab row |

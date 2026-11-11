@@ -882,6 +882,98 @@ describe('ChannelList.render', () => {
     }
   });
 
+  describe('display text cleaning', () => {
+    const STYLED_GROUP = '\u{1D40D}\u{1D41E}\u{1D430}\u{1D42C} \u{1D407}\u{1D428}\u{1D42E}\u{1D42B}';
+    const STYLED_NAME = '\u{1D400}\u{1D425}\u{1D429}\u{1D421}\u{1D41A}';
+    const EMOJI = '\u{1F4FA}';
+    let original: Channel[];
+
+    function mkChannel(name: string, group: string, url: string): Channel {
+      return {
+        id: url, name, logo: '', group, url, extras: null,
+        playlistIds: [], catchup: '', catchupSource: '', catchupDays: 0,
+      };
+    }
+
+    function groupRow(group: string): HTMLElement {
+      return Array.from(container.querySelectorAll<HTMLElement>('.group-item'))
+        .find(row => row.dataset.group === `source:${group}`)!;
+    }
+
+    function names(): (string | null | undefined)[] {
+      return channelItems().map(item => item.querySelector('.channel-name')?.textContent);
+    }
+
+    beforeEach(() => {
+      original = data.raw.slice();
+      data.raw.splice(0, data.raw.length,
+        mkChannel(STYLED_NAME, STYLED_GROUP, 'http://host/1'),
+        mkChannel(`Charlie ${EMOJI}`, STYLED_GROUP, 'http://host/2'),
+        mkChannel(EMOJI, EMOJI, 'http://host/3'),
+        mkChannel('Delta', EMOJI, 'http://host/4'),
+      );
+      playlistMock.getGroupsForPlaylist = () => [STYLED_GROUP, EMOJI];
+      playlistMock.applyCustomization();
+    });
+
+    afterEach(() => {
+      data.raw.splice(0, data.raw.length, ...original);
+      playlistMock.getGroupsForPlaylist = () => ['News', 'Sports'];
+      playlistMock.applyCustomization();
+    });
+
+    it('folds styled letters in group rail labels and keeps the group key raw', () => {
+      list.render();
+      const row = groupRow(STYLED_GROUP);
+
+      expect(row.querySelector('.group-name')?.textContent).toBe('News Hour');
+      expect(row.dataset.key).toBe(`g:source:${STYLED_GROUP}`);
+      expect(row.dataset.groupPosition).toBe('3');
+    });
+
+    it('falls back to the raw value for an emoji-only group', () => {
+      list.render();
+      const row = groupRow(EMOJI);
+
+      expect(row.querySelector('.group-name')?.textContent).toBe(EMOJI);
+    });
+
+    it('cleans both halves of the composed prefix and its aria-label', () => {
+      list.render();
+      const items = channelItems();
+
+      expect(names()).toEqual(['News Hour - Alpha', 'News Hour - Charlie', `${EMOJI} - ${EMOJI}`, `${EMOJI} - Delta`]);
+      expect(items[0].getAttribute('aria-label')).toBe('News Hour - Alpha');
+    });
+
+    it('cleans channel names outside the All prefix and the logo placeholder', () => {
+      list.render();
+      hover(groupRow(STYLED_GROUP));
+      list.handleAction('select');
+
+      expect(names()).toEqual(['Alpha', 'Charlie']);
+      expect(channelItems()[0].querySelector('.channel-logo-placeholder')?.textContent).toBe('A');
+    });
+
+    it('keeps row keys and positions stable', () => {
+      list.render();
+      const rows = channelItems();
+
+      expect(rows.map(row => row.dataset.key)).toEqual(['ch:0', 'ch:1', 'ch:2', 'ch:3']);
+      expect(rows.map(row => row.dataset.listPosition)).toEqual(['0', '1', '2', '3']);
+      expect(rows.map(row => row.dataset.channelIndex)).toEqual(['0', '1', '2', '3']);
+    });
+
+    it('does not change the channel objects', () => {
+      const before = JSON.stringify(data.channels);
+      list.render();
+
+      expect(JSON.stringify(data.channels)).toBe(before);
+      expect(data.channels[0].name).toBe(STYLED_NAME);
+      expect(data.channels[0].group).toBe(STYLED_GROUP);
+    });
+  });
+
   it('removes a failed channel logo and does not restore it on later renders', () => {
     playlistMock.channels[0].logo = 'http://host/broken.png';
     try {

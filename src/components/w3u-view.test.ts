@@ -21,8 +21,8 @@ function station(name: string, group: string, patch: Partial<Channel> = {}): Cha
   };
 }
 
-const HOSTS = CONFIG.W3U.RESOLVABLE_EMBED_HOSTS as string[];
-const ORIGINAL_HOSTS = HOSTS.slice();
+const BROWSER_ONLY = CONFIG.W3U.BROWSER_ONLY_HOSTS as string[];
+const ORIGINAL_BROWSER_ONLY = BROWSER_ONLY.slice();
 
 const resolvableStation = (name: string, group: string): Channel => station(name, group, {
   url: 'http://page.test/videoembed/1',
@@ -30,7 +30,7 @@ const resolvableStation = (name: string, group: string): Channel => station(name
 });
 
 const embedStation = (name: string, group: string): Channel => station(name, group, {
-  url: 'http://host/page',
+  url: 'http://browser.test/page',
   sourceAttributes: { 'w3u-isHost': 'true' },
 });
 
@@ -62,7 +62,7 @@ beforeEach(() => {
   document.documentElement.classList.remove('keyboard-nav');
   Focus.uninstall();
   Element.prototype.scrollIntoView = vi.fn();
-  HOSTS.push('page.test');
+  BROWSER_ONLY.push('browser.test');
   handlers = {
     onRevealTabBar: vi.fn(), onBack: vi.fn(), onPlay: vi.fn(), onCancelPlay: vi.fn(), onOpenInBrowser: vi.fn(),
   };
@@ -72,8 +72,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  HOSTS.length = 0;
-  ORIGINAL_HOSTS.forEach((host) => HOSTS.push(host));
+  BROWSER_ONLY.length = 0;
+  ORIGINAL_BROWSER_ONLY.forEach((host) => BROWSER_ONLY.push(host));
 });
 
 describe('W3uView library', () => {

@@ -109,6 +109,11 @@ Behavioural spot checks that unit tests cannot cover:
   upstream; fix before publishing under this fork's name.
 - Translations for the new strings are drafts (11 locales), written without
   the glossary/native review step.
+- Runtime-injected players (stream URL only after general JS execution) cannot be
+  resolved; they fall back to the TV browser by design. A host can also serve
+  the static payload on some requests only, so support there is best-effort.
+- Desktop playback of embed-derived streams depends on the preview-only
+  `/__hls` relay; the IPK never contains it.
 - `npm run test:e2e` has not been run in this environment (Playwright browser
   version mismatch), and nothing has been exercised on a TV except manual
   desktop preview runs.

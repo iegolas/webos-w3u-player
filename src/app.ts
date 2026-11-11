@@ -1559,6 +1559,29 @@ export class App {
 
   private playChannel(index: number, catchup?: CatchupInfo, scope: ChannelScope | null = null): void {
     this.w3uReturn = false;
+    // Live, search and the pinned overlay play through here: an embed page
+    // must be resolved first or the player receives the page URL and fails.
+    const channel = catchup ? null : PlaylistService.getByIndex(index);
+    if (channel && classifyStation(channel) === 'resolvable') {
+      this.w3uResolve?.abort();
+      const controller = new AbortController();
+      this.w3uResolve = controller;
+      void resolveEmbedStream(channel.url, channelHttpHeaders(channel), { signal: controller.signal })
+        .then((result) => {
+          if (this.w3uResolve === controller) this.w3uResolve = null;
+          if (controller.signal.aborted) return;
+          const still = PlaylistService.getByIndex(index) === channel;
+          if (result.ok && still) {
+            this.player.play(index, catchup, scope, false, {
+              url: result.url,
+              headers: result.headers,
+            });
+            return;
+          }
+          this.openStationInBrowser(channel.url);
+        });
+      return;
+    }
     this.player.play(index, catchup, scope, false);
   }
 

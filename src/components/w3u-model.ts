@@ -3,7 +3,6 @@ import { UNCATEGORIZED_GROUP } from '../types';
 import { CONFIG } from '../config';
 import { truncate } from '../utils/text';
 import { classifyStreamUrl } from '../utils/stream-url-classifier';
-import { isResolvableEmbedHost } from '../services/embed-resolver';
 import { fetchAndParseM3U } from '../parsers/m3u-loader';
 import { canonicalUrl } from '../utils/url';
 import { t, type TextMessageKey } from '../i18n';
@@ -15,8 +14,9 @@ export { canonicalUrl };
 // parsed channels; nothing is written back, so stored names stay as delivered.
 
 // 'direct': a media URL the player can load now. 'resolvable': an HTML player
-// page on a host the resolver can read, so it plays after a short wait.
-// 'browser': any other player page; the app hands it to the TV browser.
+// page worth reading for a direct stream, so it plays after a short wait.
+// 'browser': a page only its own player can show; the app hands it to the TV
+// browser.
 export type StationKind = 'direct' | 'resolvable' | 'browser';
 
 export interface W3uStation {
@@ -137,6 +137,10 @@ function hostOf(url: string): string {
   }
 }
 
+function hostMatches(host: string, hosts: readonly string[]): boolean {
+  return !!host && hosts.some((entry) => host === entry || host.endsWith(`.${entry}`));
+}
+
 function isEmbedPage(channel: Channel, embedHosts: readonly string[]): boolean {
   const attributes = channel.sourceAttributes ?? {};
   const embed = attributes['w3u-embed'];
@@ -145,22 +149,21 @@ function isEmbedPage(channel: Channel, embedHosts: readonly string[]): boolean {
   if (kind === 'media') return false;
   if (kind === 'embed') return true;
   if (attributes['w3u-isHost'] === 'true') return true;
-  const host = hostOf(channel.url);
-  return !!host && embedHosts.some((entry) => host === entry || host.endsWith(`.${entry}`));
+  return hostMatches(hostOf(channel.url), embedHosts);
 }
 
 // W3U adds its own signals to the shared URL classifier: an explicit embed
 // flag, Wiseplay's "host page" flag, and the hosts known to serve player
 // pages. A URL nobody recognizes is tried as media; the player reports a
-// failure if it is not. A player page is 'resolvable' when the resolver
-// reads its host, whichever host that is.
+// failure if it is not. A player page is 'resolvable' unless its host needs
+// its own player, since that attempt would only burn the resolve timeout.
 export function classifyStation(
   channel: Channel,
   embedHosts: readonly string[] = CONFIG.W3U.EMBED_HOSTS,
-  resolvableHosts: readonly string[] = CONFIG.W3U.RESOLVABLE_EMBED_HOSTS,
+  browserOnlyHosts: readonly string[] = CONFIG.W3U.BROWSER_ONLY_HOSTS,
 ): StationKind {
   if (!isEmbedPage(channel, embedHosts)) return 'direct';
-  return isResolvableEmbedHost(channel.url, resolvableHosts) ? 'resolvable' : 'browser';
+  return hostMatches(hostOf(channel.url), browserOnlyHosts) ? 'browser' : 'resolvable';
 }
 
 export interface StationInfo {

@@ -399,7 +399,10 @@ function stationToChannel(station: Record<string, unknown>, groupName: string): 
   }
 
   const attributes = stationAttributes(station);
-  if (Object.keys(attributes).length) channel.sourceAttributes = attributes;
+  // Mark every W3U station, even a bare one: the Library tab keys off the
+  // presence of a w3u-* attribute, so a list without metadata would hide it.
+  attributes['w3u-station'] = '1';
+  channel.sourceAttributes = attributes;
   return channel;
 }
 

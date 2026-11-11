@@ -6,6 +6,7 @@ import { StorageService } from './services/storage-service';
 import { EpgService } from './services/epg-service';
 import { ChannelHealthService } from './services/channel-health';
 import * as embedResolver from './services/embed-resolver';
+import * as browserLaunch from './services/browser-launch';
 import * as w3uModel from './components/w3u-model';
 import type { Channel } from './types';
 
@@ -89,6 +90,42 @@ describe('App W3U playback routing', () => {
       headers: { Referer: 'http://host/page' },
     });
     expect(app.w3uReturn).toBe(true);
+  });
+
+  it('hands a generic embed page whose resolve fails to the TV browser', async () => {
+    vi.spyOn(PlaylistService, 'indexOf').mockReturnValue(-1);
+    const resolve = vi.spyOn(embedResolver, 'resolveEmbedStream')
+      .mockResolvedValue({ ok: false, reason: 'no_metadata' });
+    const open = vi.spyOn(browserLaunch, 'openInBrowser').mockResolvedValue(true);
+    const title = channel({ url: 'http://host/embed/1' });
+
+    expect(w3uModel.classifyStation(title)).toBe('resolvable');
+    await app.playW3uChannel(title);
+
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(open).toHaveBeenCalledWith('http://host/embed/1');
+    expect(app.player.playChannel).not.toHaveBeenCalled();
+    expect(app.player.play).not.toHaveBeenCalled();
+    expect(app.w3uReturn).toBe(false);
+  });
+
+  it('does not open the browser when the viewer backs out of a resolve', async () => {
+    vi.spyOn(PlaylistService, 'indexOf').mockReturnValue(-1);
+    let settle!: (result: embedResolver.EmbedResolveResult) => void;
+    vi.spyOn(embedResolver, 'resolveEmbedStream').mockImplementation(
+      () => new Promise((resolve) => { settle = resolve; }),
+    );
+    const open = vi.spyOn(browserLaunch, 'openInBrowser').mockResolvedValue(true);
+
+    const playing = app.playW3uChannel(channel({ url: 'http://host/embed/1' }));
+    app.w3uResolve!.abort();
+    // The resolver answers after the abort; the attempt is abandoned anyway.
+    settle({ ok: false, reason: 'no_metadata' });
+    await playing;
+
+    expect(open).not.toHaveBeenCalled();
+    expect(app.player.playChannel).not.toHaveBeenCalled();
+    expect(app.player.play).not.toHaveBeenCalled();
   });
 
   it('returns to the Library from a detached title', () => {

@@ -155,7 +155,7 @@ export const CONFIG = {
 
   // W3U Library: embed-host list and text limits for the station detail.
   W3U: {
-    // Hosts that serve an HTML player page, not a media file. Matches the host
+    // Hosts that serve an HTML page, not a media file. Matches the host
     // itself and its subdomains.
     EMBED_HOSTS: [
       'ok.ru', 'uqload.com', 'uqload.to', 'uqload.io', 'upstream.to',
@@ -163,9 +163,16 @@ export const CONFIG = {
       'streamwish.to', 'vidhidefast.com', 'fastream.to', 'dsvplay.com',
       'ds2play.com', 'ds2video.com', 'supervideo.cc', 'youtube.com',
       'youtu.be', 'vimeo.com', 'dailymotion.com', 'dai.ly', 'pcloud.link',
+      't.me', 'telegram.me', 'discord.gg', 'wa.me', 'linktr.ee',
     ],
-    // Embed hosts whose page can be resolved to a direct stream by
-    // `services/embed-resolver.ts`, with the same host/subdomain matching.
+    // Embed hosts whose pages cannot yield a stream without their own player,
+    // so they go straight to the TV browser instead of a doomed resolve.
+    BROWSER_ONLY_HOSTS: [
+      'youtube.com', 'youtu.be', 'vimeo.com', 'dailymotion.com', 'dai.ly',
+      'pcloud.link', 't.me', 'telegram.me', 'discord.gg', 'wa.me', 'linktr.ee',
+    ],
+    // Hosts whose own `data-options` payload may be trusted over generic
+    // markup, with the same host/subdomain matching.
     RESOLVABLE_EMBED_HOSTS: ['ok.ru'],
     SYNOPSIS_MAX_CHARS: 1200,
     GENRES_MAX: 4,

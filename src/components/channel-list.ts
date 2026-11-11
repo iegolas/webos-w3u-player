@@ -32,6 +32,7 @@ import { ChannelListEditor } from './channel-list-editor';
 import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
 import { CONFIG } from '../config';
+import { cleanDisplayText } from './w3u-model';
 
 // Row strides mirror the fixed row geometry in css/channel-list.css:
 // .channel-item is 88px, .group-item is 60px plus its 8px vertical margin.
@@ -45,6 +46,12 @@ type RowList = 'group' | 'channel';
 // 'render': a re-render that requests no focus of its own.
 type SyncVia = Via | 'render';
 type PinnedGroup = ReturnType<typeof PlaylistService.pinnedLiveGroups>[number];
+
+// Display only: the TV font lacks styled letters and emoji. A name that cleans
+// to nothing shows as written rather than as a blank row.
+function displayName(text: string): string {
+  return cleanDisplayText(text) || text;
+}
 
 let liveList: ChannelList | null = null;
 type ChannelSelectionMode = 'expand-current' | 'fullscreen';
@@ -900,17 +907,18 @@ export class ChannelList {
       ? this.recentItems.length
       : PlaylistService.getGroupCount(g.id, this.currentPlaylist || undefined);
     const pinned = isSource && !this.editor.isEditing && this.pinnedGroups.has(g.id);
+    const label = displayName(g.label);
 
     return html`
       <div class="group-item ${g.id === this.currentGroup ? 'active' : ''} ${hidden ? 'hidden-entry' : ''} ${grabbed ? 'grabbed' : ''}"
            data-key="g:${g.id}"
            data-focusable data-group="${g.id}" data-group-position="${position}"
            style="top:${top}px">
-        <span class="group-icon">${raw(groupIcon(g.label, g.builtin))}</span>
+        <span class="group-icon">${raw(groupIcon(label, g.builtin))}</span>
         ${renaming
           ? html`<input class="edit-text-input" type="text" value="${this.editor.renameValue(g.label)}">`
           : html`<span class="group-name">${
-              raw(liveGroupLockBadge(g.id, this.currentPlaylist))}${g.label}</span>`}
+              raw(liveGroupLockBadge(g.id, this.currentPlaylist))}${label}</span>`}
         ${pinned ? this.pinChip(g.id) : ''}
         <span class="group-count">${count}</span>
       </div>
@@ -1076,7 +1084,7 @@ export class ChannelList {
         sizes.set(ch.group, size);
       }
       const group = ch.group === UNCATEGORIZED_GROUP ? '' : ch.group.trim();
-      return size > 1 && group ? `${group} - ${ch.name}` : null;
+      return size > 1 && group ? `${displayName(group)} - ${displayName(ch.name)}` : null;
     };
   }
 
@@ -1113,7 +1121,7 @@ export class ChannelList {
             ? html`<input class="edit-text-input" type="text" value="${this.editor.renameValue(ch.name)}">`
             : html`<div class="channel-name">${raw(channelLockBadge(ch))}${
                 showFavoriteStar ? raw(favoriteIcon(true)) : ''
-              }${composed ?? ch.name}</div>`}
+              }${composed ?? displayName(ch.name)}</div>`}
           ${this.editor.isChannelEditing && ch.sourceName
             ? html`<div class="channel-now channel-source-name">${ch.sourceName}</div>`
             : (nowPlaying
@@ -1147,7 +1155,7 @@ export class ChannelList {
           <div class="channel-info">
             <div class="channel-name">${raw(channelLockBadge(item.channel))}${
               isFav ? raw(favoriteIcon(true)) : ''
-            }${item.channel.name}</div>
+            }${displayName(item.channel.name)}</div>
             ${nowPlaying ? html`<div class="channel-now">${nowPlaying.title}</div>` : ''}
           </div>
           ${this.renderHealth(item.channel)}
@@ -1175,7 +1183,7 @@ export class ChannelList {
             isFav ? raw(favoriteIcon(true)) : ''
           }${item.progress.title ?? ''}</div>
           <div class="channel-now">${t('channel.resumeAt', {
-            channel: item.channel.name,
+            channel: displayName(item.channel.name),
             position: formatPosition(item.progress.position),
           })}</div>
           <div class="recent-progress"><div class="recent-progress-fill" style="width:${percent}%"></div></div>
@@ -1189,7 +1197,8 @@ export class ChannelList {
   private renderLogo(ch: Channel): Safe {
     let logo: Safe | string = '';
     if (!ch.logo) {
-      logo = html`<div class="channel-logo-placeholder">${ch.name.charAt(0)}</div>`;
+      // charAt would split a styled letter's surrogate pair into a blank box.
+      logo = html`<div class="channel-logo-placeholder">${Array.from(displayName(ch.name))[0] ?? ''}</div>`;
     } else if (!this.failedLogos.has(ch.logo)) {
       logo = html`<img class="channel-logo" src="${ch.logo}" alt="" loading="lazy">`;
     }

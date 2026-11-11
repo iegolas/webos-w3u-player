@@ -23,8 +23,10 @@ an escalation chain: `<video>` → Luna media service → on-device proxy, with
 
 ## Embed resolution
 
-Only hosts in `CONFIG.W3U.RESOLVABLE_EMBED_HOSTS` (currently the ok.ru video
-host) are attempted; everything else is `unsupported_host` and never fetched.
+Resolution is attempted for **any** URL the classifier calls `embed`, except
+hosts in `CONFIG.W3U.BROWSER_ONLY_HOSTS` (video platforms and invite/link-hub
+pages whose player must run). The trusted `data-options` payload path stays
+restricted to `CONFIG.W3U.RESOLVABLE_EMBED_HOSTS`.
 
 ```
 page URL → fetchManifestViaService(pageUrl, { Referer: origin, User-Agent: TV UA })
@@ -41,8 +43,32 @@ own `fetch` is blocked; the bundled webOS service does a bounded plain GET
 feature. On desktop there is no Luna service and the resolver returns
 `unavailable`; the UI falls back to the TV browser hand-off.
 
+Generic extraction runs when the structured path finds nothing, in order:
+literal absolute `.m3u8`/`.mp4` URLs in the page; the simple XOR char-array
+payload (`_ls2` + two integer keys) decoded arithmetically — never `eval`;
+relative `file:`/`src:`/`url:` media values resolved against the final page
+URL after redirects. HLS is preferred over MP4.
+
 Cache: in-memory per page URL, capped at 10 minutes and never beyond the
 signed URL's `expires`. Nothing persisted.
+
+### Desktop needs a proxy (CORS)
+
+Resolved manifests often carry **no `Access-Control-Allow-Origin`** and some
+CDNs answer `403` unless `Referer`/`Origin` is their own site — neither is
+settable by page JS. The preview therefore routes the resolved stream through
+the dev server:
+
+- `/__embed?url=` fetches the page server-side (already used for extraction);
+- `/__hls?u=<stream>&r=<page origin>` proxies the manifest and media: playlist
+  URIs are rewritten through itself, `Referer`/`Origin` are forwarded, `Range`
+  is passed through (206), private targets are refused.
+
+Both endpoints live in `scripts/serve.mjs` and are **preview-only** — they are
+not part of the IPK, and the TV keeps the direct URL plus playback headers.
+
+Still impossible on desktop: DRM, cookie/custom-header-gated streams, and
+players whose URL only exists after general JS execution.
 
 ## Browser hand-off
 
