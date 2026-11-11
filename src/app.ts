@@ -29,6 +29,7 @@ import { TabBar, type Section, sectionForView } from './components/tab-bar';
 import { Movies } from './components/movies';
 import { Series } from './components/series';
 import { W3uView } from './components/w3u-view';
+import { InAppBrowser } from './components/in-app-browser';
 import { classifyStation, hasW3uLibrary } from './components/w3u-model';
 import { resolveEmbedStream } from './services/embed-resolver';
 import { Search } from './components/search';
@@ -69,7 +70,7 @@ import { getLocale, initLocale, resolveLocale, setLocale, t, tp } from './i18n';
 const log = createLogger('App');
 
 type ViewName = 'channels' | 'player' | 'epg' | 'settings' | 'parental-controls' | 'reminders'
-  | 'loading' | 'movies' | 'series' | 'w3u' | 'search';
+  | 'loading' | 'movies' | 'series' | 'w3u' | 'browser' | 'search';
 
 export class App {
   private views!: Record<ViewName, HTMLElement>;
@@ -98,9 +99,15 @@ export class App {
   private movies!: Movies;
   private series!: Series;
   private w3u!: W3uView;
+  private browser!: InAppBrowser;
   // Set while a Library title plays, so Back returns to the Library, not Live.
   private w3uReturn = false;
   private w3uResolve: AbortController | null = null;
+  // The Live activation that owns the resolve in flight, so a second press
+  // does not start (and open) the same page again.
+  private resolveChannel: Channel | null = null;
+  // Where the in-app Browser goes back to: the Library or Live.
+  private browserReturn: 'w3u' | 'channels' = 'w3u';
   private lastSearchQuery = '';
   private enterChannelsAfterUploadSync = false;
   private remindersInitialized = false;
@@ -143,6 +150,7 @@ export class App {
       movies: $('#view-movies')!,
       series: $('#view-series')!,
       w3u: $('#view-w3u')!,
+      browser: $('#view-browser')!,
       search: $('#view-search')!,
       loading: $('#view-loading')!,
     };
@@ -310,6 +318,7 @@ export class App {
       onPlay: (channel) => this.playW3uChannel(channel),
       onCancelPlay: () => this.w3uResolve?.abort(),
       onOpenInBrowser: (station) => this.openStationInBrowser(station.channel.url),
+      onOpenInApp: (station) => this.openInAppBrowser(station.channel.url),
       pins: {
         isPinned: (url, group) => PlaylistService.isGroupPinned(url, group),
         setPinned: (request, pinned) => PlaylistService.setGroupPinned(request, pinned),
@@ -317,6 +326,11 @@ export class App {
         takeNotices: () => PlaylistService.takePinnedLinkNotices(),
       },
       onNotice: (message) => showToast(message),
+    });
+    this.browser = new InAppBrowser(this.views.browser, {
+      onRevealTabBar: () => this.leaveUp(),
+      onClose: () => this.closeInAppBrowser(),
+      onOpenExternal: (url) => this.openStationInBrowser(url),
     });
     this.search = new Search(this.views.search, {
       onRevealTabBar: () => this.leaveUp(),
@@ -1087,6 +1101,11 @@ export class App {
     }
     this.historyDropdown?.close('view-change');
     if (name !== 'player') this.w3uReturn = false;
+    // The page lives only while its view is shown: a hidden frame would keep playing.
+    if (name !== 'browser') {
+      this.browser?.close();
+      this.browserReturn = 'w3u';
+    }
     // Leaving the Library abandons a station that is still resolving.
     if (name !== 'w3u' && name !== 'player') {
       this.w3uResolve?.abort();
@@ -1198,6 +1217,11 @@ export class App {
         .filter((playlist) => owners.has(playlist.id))
         .map((playlist) => playlist.url);
       this.w3u.open(PlaylistService.channels, links, rootUrls);
+      return;
+    }
+    if (section === 'browser') {
+      this.showView('browser');
+      this.browser.show();
       return;
     }
     if (section === 'settings') {
@@ -1427,6 +1451,10 @@ export class App {
         this.w3u.resumeFocus();
         return;
       }
+      if (section === 'browser') {
+        this.browser.resumeFocus();
+        return;
+      }
       // A view scope without keys of its own (a plain `view.*`) has nothing to resume.
       const owner = Focus.owner();
       if (owner?.logical) owner.enter('resume');
@@ -1559,30 +1587,50 @@ export class App {
 
   private playChannel(index: number, catchup?: CatchupInfo, scope: ChannelScope | null = null): void {
     this.w3uReturn = false;
-    // Live, search and the pinned overlay play through here: an embed page
-    // must be resolved first or the player receives the page URL and fails.
+    // Live, search and the pinned overlay play through here. A page the player
+    // cannot load opens in the in-app Browser; a resolvable one is tried first.
     const channel = catchup ? null : PlaylistService.getByIndex(index);
-    if (channel && classifyStation(channel) === 'resolvable') {
-      this.w3uResolve?.abort();
-      const controller = new AbortController();
-      this.w3uResolve = controller;
-      void resolveEmbedStream(channel.url, channelHttpHeaders(channel), { signal: controller.signal })
-        .then((result) => {
-          if (this.w3uResolve === controller) this.w3uResolve = null;
-          if (controller.signal.aborted) return;
-          const still = PlaylistService.getByIndex(index) === channel;
-          if (result.ok && still) {
-            this.player.play(index, catchup, scope, false, {
-              url: result.url,
-              headers: result.headers,
-            });
-            return;
-          }
-          this.openStationInBrowser(channel.url);
-        });
+    if (!channel) {
+      this.player.play(index, catchup, scope, false);
       return;
     }
-    this.player.play(index, catchup, scope, false);
+    const kind = classifyStation(channel);
+    if (kind === 'direct') {
+      this.abortResolve();
+      this.player.play(index, catchup, scope, false);
+      return;
+    }
+    // This activation supersedes a resolve still running for another channel.
+    if (this.resolveChannel === channel) return;
+    this.abortResolve();
+    if (kind === 'browser') {
+      this.openInAppBrowser(channel.url, 'channels');
+      return;
+    }
+    const controller = new AbortController();
+    this.w3uResolve = controller;
+    this.resolveChannel = channel;
+    void resolveEmbedStream(channel.url, channelHttpHeaders(channel), { signal: controller.signal })
+      .then((result) => {
+        if (this.w3uResolve === controller) this.w3uResolve = null;
+        if (this.resolveChannel === channel) this.resolveChannel = null;
+        if (controller.signal.aborted) return;
+        const still = PlaylistService.getByIndex(index) === channel;
+        if (result.ok && still) {
+          this.player.play(index, catchup, scope, false, {
+            url: result.url,
+            headers: result.headers,
+          });
+          return;
+        }
+        if (!result.ok && result.reason === 'aborted') return;
+        this.openInAppBrowser(channel.url, 'channels');
+      });
+  }
+
+  private abortResolve(): void {
+    this.w3uResolve?.abort();
+    this.resolveChannel = null;
   }
 
   private onPlayerBack(): void {
@@ -1633,10 +1681,37 @@ export class App {
     this.w3uReturn = true;
   }
 
+  // The Library's Play keeps the plain player path, whatever the page kind.
   private startW3uChannel(index: number): void {
-    this.playChannel(index);
-    // After playChannel, which clears the flag for every other caller.
+    this.w3uReturn = false;
+    this.abortResolve();
+    this.player.play(index, undefined, null, false);
     this.w3uReturn = true;
+  }
+
+  // A Library title's page inside the app. The Library stays as it was (its
+  // detail open), so Close and Back return to the title it was opened from.
+  private openInAppBrowser(url: string, back: 'w3u' | 'channels' = 'w3u'): void {
+    if (!this.browser.open(url)) {
+      showToast(t('browser.invalidUrl'));
+      return;
+    }
+    this.browserReturn = back;
+    this.tabBar.blur();
+    this.player.stop();
+    this.showView('browser');
+    this.browser.show();
+  }
+
+  private closeInAppBrowser(): void {
+    this.browser.close();
+    if (this.browserReturn === 'channels') {
+      this.goLive();
+      return;
+    }
+    this.tabBar.setActive('w3u');
+    this.showView('w3u');
+    this.w3u.resumeFocus();
   }
 
   // Placeholder: the TV browser launch is wired separately. Until it claims
@@ -1742,6 +1817,7 @@ export class App {
       movies: this.movies.focusScope,
       series: this.series.focusScope,
       w3u: this.w3u.focusScope,
+      browser: this.browser.focusScope,
       search: this.search.focusScope,
       reminders: this.reminderManager.focusScope,
     };
@@ -1823,6 +1899,8 @@ export class App {
 
     // Back handling
     if (action === 'back') {
+      // Backing out of Live abandons a resolve, so a late result opens nothing.
+      this.abortResolve();
       if (currentView === 'player') {
         if (this.sidebar.visible) {
           if (!this.sidebar.handleBack()) this.sidebar.hide();
@@ -1838,6 +1916,7 @@ export class App {
       if (currentView === 'movies') { this.movies.handleAction('back'); return; }
       if (currentView === 'series') { this.series.handleAction('back'); return; }
       if (currentView === 'w3u') { this.w3u.handleAction('back'); return; }
+      if (currentView === 'browser') { this.browser.handleAction('back'); return; }
       if (currentView === 'search') { this.search.handleAction('back'); return; }
       if (currentView === 'epg') {
         if (this.epgGrid.isFilterOpen) {
@@ -1895,6 +1974,9 @@ export class App {
         break;
       case 'w3u':
         this.w3u.handleAction(action);
+        break;
+      case 'browser':
+        this.browser.handleAction(action);
         break;
       case 'search':
         this.search.handleAction(action);

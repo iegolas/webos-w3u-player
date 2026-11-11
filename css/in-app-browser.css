@@ -1,0 +1,193 @@
+/* The Browser section: a slim bar, one full-width frame, a one-line hint.
+   The frame takes every pixel the bar and hint leave. */
+
+body.tabbar-docked #view-browser {
+  top: 96px;
+  height: 984px;
+}
+
+.ab {
+  display: flex;
+  flex-direction: column;
+  width: 1920px;
+  height: 100%;
+  outline: none;
+}
+.ab-session {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+/* Bar: three actions, then the host, which gives way first when space runs out. */
+.ab-bar {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  box-sizing: border-box;
+  height: 84px;
+  padding: 0 40px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+}
+.ab-btn {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  margin-right: 16px;
+  padding: 10px 20px;
+  border: 3px solid transparent;
+  border-radius: 10px;
+  background: var(--catalog-control);
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 24px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  outline: none;
+}
+.ab-btn.focused { border-color: var(--text-primary); }
+.ab-btn-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  margin-right: 10px;
+}
+.ab-btn-icon svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ab-host {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin-left: 16px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 24px;
+  color: var(--text-secondary);
+}
+
+/* Body: the frame, with the loading and failure cards floating over it. */
+.ab-body {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  background: #000;
+}
+.ab-stage {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+}
+.ab-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #000;
+}
+/* The overlay lets the pointer through to the page; only a card catches it. */
+.ab-overlay {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.ab-card {
+  box-sizing: border-box;
+  max-width: 880px;
+  padding: 32px 40px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-secondary);
+  text-align: center;
+  pointer-events: auto;
+}
+.ab-card-loading {
+  display: flex;
+  align-items: center;
+  padding: 18px 28px;
+  font-size: 24px;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+.ab-spinner {
+  box-sizing: border-box;
+  width: 28px;
+  height: 28px;
+  margin-right: 16px;
+  border: 4px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+.ab-card-title {
+  margin: 0 0 12px;
+  font-size: 30px;
+}
+.ab-card-hint {
+  margin: 0 0 28px;
+  font-size: 24px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.ab-card .ab-btn { margin-right: 0; }
+
+/* Hint line. */
+.ab-foot {
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  height: 44px;
+  padding: 0 40px;
+  overflow: hidden;
+  background: var(--bg-secondary);
+  border-top: 1px solid var(--border);
+  font-size: 20px;
+  line-height: 44px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-muted);
+}
+.ab-foot-note { margin-left: 12px; }
+.ab-foot-active { color: var(--warning); }
+
+/* Nothing open yet. */
+.ab-empty {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 0 160px;
+  text-align: center;
+}
+.ab-empty-title {
+  margin: 0 0 16px;
+  font-size: 36px;
+  font-weight: 600;
+}
+.ab-empty-hint {
+  max-width: 900px;
+  margin: 0 0 40px;
+  font-size: 26px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+.ab-empty .ab-btn { margin-right: 0; }

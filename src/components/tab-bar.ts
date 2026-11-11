@@ -26,13 +26,15 @@ type SearchCollapseReason = 'toggle' | 'back' | 'escape' | 'dismiss' | 'hidden' 
 
 // The single source of truth for the sections: order, label, the view each maps
 // to, and whether it needs an Xtream account. The W3U Library tab shows only
-// while a W3U playlist is loaded.
+// while a W3U playlist is loaded, and the Browser tab beside it: the Library is
+// where a page is opened from, and an empty Browser says so.
 export const SECTIONS = [
   { id: 'live', labelKey: 'nav.live', view: 'channels', xtreamOnly: false },
   { id: 'epg', labelKey: 'nav.epg', view: 'epg', xtreamOnly: false },
   { id: 'movies', labelKey: 'nav.movies', view: 'movies', xtreamOnly: true },
   { id: 'series', labelKey: 'nav.series', view: 'series', xtreamOnly: true },
   { id: 'w3u', labelKey: 'nav.w3u', view: 'w3u', xtreamOnly: false },
+  { id: 'browser', labelKey: 'nav.browser', view: 'browser', xtreamOnly: false },
   { id: 'settings', labelKey: 'nav.settings', view: 'settings', xtreamOnly: false },
   { id: 'search', labelKey: 'nav.search', view: 'search', xtreamOnly: false },
 ] as const;
@@ -44,7 +46,7 @@ type SectionDef = typeof SECTIONS[number];
 // catalog, so they see Live, Guide, Settings and Search only.
 function sectionsFor(hasXtream: boolean, hasW3u: boolean, showGuide: boolean): readonly SectionDef[] {
   return SECTIONS.filter((s) => (hasXtream || !s.xtreamOnly)
-    && (hasW3u || s.id !== 'w3u')
+    && (hasW3u || (s.id !== 'w3u' && s.id !== 'browser'))
     && (showGuide || s.id !== 'epg'));
 }
 

@@ -64,7 +64,7 @@ beforeEach(() => {
   Element.prototype.scrollIntoView = vi.fn();
   BROWSER_ONLY.push('browser.test');
   handlers = {
-    onRevealTabBar: vi.fn(), onBack: vi.fn(), onPlay: vi.fn(), onCancelPlay: vi.fn(), onOpenInBrowser: vi.fn(),
+    onRevealTabBar: vi.fn(), onBack: vi.fn(), onPlay: vi.fn(), onCancelPlay: vi.fn(), onOpenInBrowser: vi.fn(), onOpenInApp: vi.fn(),
   };
   container = document.createElement('div');
   document.body.innerHTML = '';
@@ -203,14 +203,14 @@ describe('W3uView detail', () => {
       return view;
     }
 
-    it('offers Play first and Open in TV browser second, without a note', () => {
+    it('offers Play, then Open in app browser, then Open in TV browser, without a note', () => {
       openDetail();
-      expect(buttons().map((el) => el.textContent?.trim())).toEqual(['Play', 'Open in TV browser']);
-      expect(buttons().map((el) => el.getAttribute('data-key'))).toEqual(['d:action', 'd:browser']);
+      expect(buttons().map((el) => el.textContent?.trim())).toEqual(['Play', 'Open in app browser', 'Open in TV browser']);
+      expect(buttons().map((el) => el.getAttribute('data-key'))).toEqual(['d:action', 'd:app', 'd:browser']);
       expect(buttons()[0].classList.contains('detail-btn-primary')).toBe(true);
       expect(buttons()[1].classList.contains('detail-btn-primary')).toBe(false);
-      expect(buttons()[0].querySelector('svg')).not.toBeNull();
-      expect(buttons()[1].querySelector('svg')).not.toBeNull();
+      expect(buttons()[2].classList.contains('detail-btn-primary')).toBe(false);
+      buttons().forEach((button) => expect(button.querySelector('svg')).not.toBeNull());
       expect(container.querySelector('.w3u-layer-detail .w3u-note')).toBeNull();
       expect(focusedKeys()).toEqual(['d:action']);
     });
@@ -221,35 +221,54 @@ describe('W3uView detail', () => {
       expect(handlers.onPlay).toHaveBeenCalledTimes(1);
       expect(handlers.onPlay).toHaveBeenCalledWith(channel);
       expect(handlers.onOpenInBrowser).not.toHaveBeenCalled();
+      expect(handlers.onOpenInApp).not.toHaveBeenCalled();
     });
 
-    it('opens the TV browser on OK from the second action, without playing or a spinner', () => {
+    it('opens the title in the app browser on OK from the second action, not the TV browser', () => {
       const view = openDetail();
+      pressKey(view, 'right');
+      expect(focusedKeys()).toEqual(['d:app']);
+      pressKey(view, 'select');
+      expect(handlers.onOpenInApp).toHaveBeenCalledTimes(1);
+      expect(handlers.onOpenInApp.mock.calls[0][0]).toMatchObject({ name: channel.name, kind });
+      expect(handlers.onOpenInBrowser).not.toHaveBeenCalled();
+      expect(handlers.onPlay).not.toHaveBeenCalled();
+      expect(container.querySelector('.w3u-busy')).toBeNull();
+    });
+
+    it('opens the TV browser on OK from the third action, without playing or a spinner', () => {
+      const view = openDetail();
+      pressKey(view, 'right');
       pressKey(view, 'right');
       expect(focusedKeys()).toEqual(['d:browser']);
       pressKey(view, 'select');
       expect(handlers.onOpenInBrowser).toHaveBeenCalledTimes(1);
       expect(handlers.onOpenInBrowser.mock.calls[0][0]).toMatchObject({ name: channel.name, kind });
+      expect(handlers.onOpenInApp).not.toHaveBeenCalled();
       expect(handlers.onPlay).not.toHaveBeenCalled();
       expect(container.querySelector('.w3u-busy')).toBeNull();
-      expect(buttons()[1].hasAttribute('aria-busy')).toBe(false);
+      expect(buttons()[2].hasAttribute('aria-busy')).toBe(false);
       expect(buttons()[0].getAttribute('aria-busy')).toBe('false');
     });
 
-    it('moves between the two actions with one ring, and stops at the ends', () => {
+    it('moves across the three actions with one ring, and stops at the ends', () => {
       const view = openDetail();
       pressKey(view, 'left');
       expect(focusedKeys()).toEqual(['d:action']);
       pressKey(view, 'right');
+      expect(focusedKeys()).toEqual(['d:app']);
+      pressKey(view, 'right');
       expect(focusedKeys()).toEqual(['d:browser']);
       pressKey(view, 'right');
       expect(focusedKeys()).toEqual(['d:browser']);
+      pressKey(view, 'left');
+      expect(focusedKeys()).toEqual(['d:app']);
       pressKey(view, 'left');
       expect(focusedKeys()).toEqual(['d:action']);
       expect(container.querySelectorAll('.focused')).toHaveLength(1);
     });
 
-    it('hands Up to the tab bar and Back to the grid from the second action', () => {
+    it('hands Up to the tab bar and Back to the grid from the app browser action', () => {
       const view = openDetail();
       pressKey(view, 'right');
       pressKey(view, 'up');
@@ -292,8 +311,9 @@ describe('W3uView detail', () => {
       const view = openDetail();
       pressKey(view, 'select');
       pressKey(view, 'right');
+      pressKey(view, 'right');
       expect(buttons()[0].textContent).toContain('Starting');
-      expect(buttons()[1].textContent).toContain('Open in TV browser');
+      expect(buttons()[2].textContent).toContain('Open in TV browser');
       expect(focusedKeys()).toEqual(['d:browser']);
       finish();
       await Promise.resolve();
@@ -307,8 +327,12 @@ describe('W3uView detail', () => {
       pressKey(view, 'select');
       pressKey(view, 'right');
       pressKey(view, 'select');
+      pressKey(view, 'right');
+      pressKey(view, 'select');
+      pressKey(view, 'left');
       pressKey(view, 'left');
       pressKey(view, 'select');
+      expect(handlers.onOpenInApp).not.toHaveBeenCalled();
       expect(handlers.onOpenInBrowser).not.toHaveBeenCalled();
       expect(handlers.onPlay).toHaveBeenCalledTimes(1);
     });

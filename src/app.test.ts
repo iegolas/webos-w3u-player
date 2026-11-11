@@ -11,13 +11,29 @@ import * as w3uModel from './components/w3u-model';
 import type { Channel } from './types';
 
 type AppInternals = {
-  player: { play: ReturnType<typeof vi.fn>; playChannel: ReturnType<typeof vi.fn> };
+  player: {
+    play: ReturnType<typeof vi.fn>;
+    playChannel: ReturnType<typeof vi.fn>;
+    stop: ReturnType<typeof vi.fn>;
+  };
+  browser: {
+    open: ReturnType<typeof vi.fn>;
+    show: ReturnType<typeof vi.fn>;
+    close: ReturnType<typeof vi.fn>;
+  };
+  tabBar: { blur: ReturnType<typeof vi.fn>; setActive: ReturnType<typeof vi.fn> };
+  livePreview: { handleBack(): boolean };
   w3u: { resumeFocus(): void };
-  channelList: { render(): void };
+  channelList: { render(): void; handleBack(): boolean };
   w3uReturn: boolean;
   w3uResolve: AbortController | null;
+  resolveChannel: Channel | null;
+  playChannel(index: number): void;
   playW3uChannel(channel: Channel): Promise<void> | void;
   onPlayerBack(): void;
+  handleKey(action: string): void;
+  closeInAppBrowser(): void;
+  goLive(): void;
   showView(name: string): void;
 };
 
@@ -30,11 +46,15 @@ function channel(overrides: Partial<Channel> = {}): Channel {
 
 function makeApp(): AppInternals {
   const app = new App() as unknown as AppInternals;
-  app.player = { play: vi.fn(), playChannel: vi.fn() };
+  app.player = { play: vi.fn(), playChannel: vi.fn(), stop: vi.fn() };
+  app.browser = { open: vi.fn(() => true), show: vi.fn(), close: vi.fn() };
+  app.tabBar = { blur: vi.fn(), setActive: vi.fn() };
+  app.livePreview = { handleBack: () => false };
   app.w3u = { resumeFocus: vi.fn() };
-  app.channelList = { render: vi.fn() };
+  app.channelList = { render: vi.fn(), handleBack: () => false };
   app.w3uReturn = false;
   app.w3uResolve = null;
+  app.resolveChannel = null;
   app.showView = vi.fn();
   return app;
 }
@@ -136,6 +156,130 @@ describe('App W3U playback routing', () => {
 
     expect(app.showView).toHaveBeenCalledWith('w3u');
     expect(app.w3u.resumeFocus).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a browser-only Library title on the player path', () => {
+    vi.spyOn(PlaylistService, 'indexOf').mockReturnValue(3);
+    vi.spyOn(w3uModel, 'classifyStation').mockReturnValue('browser');
+
+    app.playW3uChannel(channel({ url: 'http://host/page' }));
+
+    expect(app.player.play).toHaveBeenCalledWith(3, undefined, null, false);
+    expect(app.browser.open).not.toHaveBeenCalled();
+  });
+});
+
+describe('App Live page routing', () => {
+  let app: AppInternals;
+
+  beforeEach(() => {
+    app = makeApp();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('opens a Live embed page in the in-app Browser when its resolve fails', async () => {
+    const title = channel({ url: 'http://host/embed/1' });
+    vi.spyOn(PlaylistService, 'getByIndex').mockReturnValue(title);
+    vi.spyOn(w3uModel, 'classifyStation').mockReturnValue('resolvable');
+    vi.spyOn(embedResolver, 'resolveEmbedStream')
+      .mockResolvedValue({ ok: false, reason: 'no_metadata' });
+    const external = vi.spyOn(browserLaunch, 'openInBrowser');
+
+    app.playChannel(4);
+    await vi.waitFor(() => expect(app.browser.open).toHaveBeenCalledOnce());
+
+    expect(app.browser.open).toHaveBeenCalledWith('http://host/embed/1');
+    expect(app.showView).toHaveBeenCalledWith('browser');
+    expect(app.player.play).not.toHaveBeenCalled();
+    expect(external).not.toHaveBeenCalled();
+  });
+
+  it('opens a browser-classified Live channel in the in-app Browser directly', () => {
+    vi.spyOn(PlaylistService, 'getByIndex')
+      .mockReturnValue(channel({ url: 'http://host/watch/1' }));
+    vi.spyOn(w3uModel, 'classifyStation').mockReturnValue('browser');
+    const external = vi.spyOn(browserLaunch, 'openInBrowser');
+
+    app.playChannel(2);
+
+    expect(app.browser.open).toHaveBeenCalledWith('http://host/watch/1');
+    expect(app.player.play).not.toHaveBeenCalled();
+    expect(external).not.toHaveBeenCalled();
+  });
+
+  it('still plays a direct-media Live channel', () => {
+    vi.spyOn(PlaylistService, 'getByIndex')
+      .mockReturnValue(channel({ url: 'http://host/a.mp4' }));
+
+    app.playChannel(7);
+
+    expect(app.player.play).toHaveBeenCalledWith(7, undefined, null, false);
+    expect(app.browser.open).not.toHaveBeenCalled();
+  });
+
+  it('opens nothing when Back cancels a resolve in flight', async () => {
+    let settle!: (result: embedResolver.EmbedResolveResult) => void;
+    vi.spyOn(PlaylistService, 'getByIndex')
+      .mockReturnValue(channel({ url: 'http://host/embed/1' }));
+    vi.spyOn(w3uModel, 'classifyStation').mockReturnValue('resolvable');
+    vi.spyOn(embedResolver, 'resolveEmbedStream').mockImplementation(
+      () => new Promise((resolve) => { settle = resolve; }),
+    );
+
+    app.playChannel(1);
+    app.handleKey('back');
+    settle({ ok: false, reason: 'no_metadata' });
+    await Promise.resolve();
+
+    expect(app.browser.open).not.toHaveBeenCalled();
+    expect(app.player.play).not.toHaveBeenCalled();
+  });
+
+  it('starts a second activation only once while a resolve runs', async () => {
+    const title = channel({ url: 'http://host/embed/1' });
+    let settle!: (result: embedResolver.EmbedResolveResult) => void;
+    vi.spyOn(PlaylistService, 'getByIndex').mockReturnValue(title);
+    vi.spyOn(w3uModel, 'classifyStation').mockReturnValue('resolvable');
+    const resolve = vi.spyOn(embedResolver, 'resolveEmbedStream').mockImplementation(
+      () => new Promise((done) => { settle = done; }),
+    );
+
+    app.playChannel(1);
+    app.playChannel(1);
+    settle({ ok: false, reason: 'no_metadata' });
+    await Promise.resolve();
+
+    expect(resolve).toHaveBeenCalledOnce();
+    expect(app.browser.open).toHaveBeenCalledOnce();
+  });
+
+  it('returns to Live when a page opened from Live closes', () => {
+    vi.spyOn(PlaylistService, 'getByIndex')
+      .mockReturnValue(channel({ url: 'http://host/watch/1' }));
+    vi.spyOn(w3uModel, 'classifyStation').mockReturnValue('browser');
+    app.goLive = vi.fn();
+
+    app.playChannel(2);
+    app.closeInAppBrowser();
+
+    expect(app.goLive).toHaveBeenCalledOnce();
+    expect(app.w3u.resumeFocus).not.toHaveBeenCalled();
+  });
+
+  it('replaces an open Live page with the next one', () => {
+    const first = channel({ url: 'http://host/watch/1' });
+    const second = channel({ url: 'http://host/watch/2' });
+    vi.spyOn(PlaylistService, 'getByIndex').mockReturnValueOnce(first).mockReturnValueOnce(second);
+    vi.spyOn(w3uModel, 'classifyStation').mockReturnValue('browser');
+
+    app.playChannel(2);
+    app.playChannel(5);
+
+    expect(app.browser.open).toHaveBeenNthCalledWith(1, 'http://host/watch/1');
+    expect(app.browser.open).toHaveBeenNthCalledWith(2, 'http://host/watch/2');
   });
 });
 

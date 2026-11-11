@@ -277,6 +277,32 @@ describe('i18n', () => {
     expect(validateTranslations()).toEqual([]);
   });
 
+  it('names the in-app browser actions the same way everywhere they are mentioned, in every locale', () => {
+    try {
+      for (const { value } of localeOptions()) {
+        setLocale(value);
+        const where = `locale ${value}`;
+        for (const key of [
+          'nav.browser', 'w3u.openInApp', 'browser.close', 'browser.reload', 'browser.hint',
+          'browser.hintBlank', 'browser.pageActive', 'browser.failedTitle', 'browser.failedHint',
+          'browser.emptyTitle', 'browser.emptyHint', 'browser.openLibrary', 'browser.invalidUrl',
+        ] as const) {
+          expect(t(key).length, `${where} ${key}`).toBeGreaterThan(0);
+        }
+        // The empty state points at the Library button by its own label.
+        expect(t('browser.emptyHint', { action: t('w3u.openInApp') }), where).toContain(t('w3u.openInApp'));
+        expect(t('browser.emptyHint', { action: t('w3u.openInApp') }), where).not.toContain('{action}');
+        // The blank-page hint names the TV browser button as it is labeled.
+        expect(t('browser.hintBlank'), where).toContain(t('w3u.openInBrowser'));
+        expect(t('w3u.openInApp'), where).not.toBe(t('w3u.openInBrowser'));
+      }
+    } finally {
+      setLocale(DEFAULT_LOCALE);
+    }
+    expect(t('nav.browser')).toBe('Browser');
+    expect(t('w3u.openInApp')).toBe('Open in app browser');
+  });
+
   it('localizes live preview settings and remaining minutes in every locale', () => {
     try {
       for (const { value } of localeOptions()) {

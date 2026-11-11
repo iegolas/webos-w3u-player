@@ -32,6 +32,9 @@ import {
   type W3uStation,
 } from './w3u-model';
 
+// A window with a title bar: the page opens inside the app.
+const APP_BROWSER_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M6.5 6.5h.01M9.5 6.5h.01"/></svg>';
+
 // Geometry mirrors css/w3u-view.css: .catalog-grid-cell is 220x371 and a grid
 // row is 395px; a .w3u-group row is 76px plus its 8px gap.
 const GRID_COLUMN_STRIDE = 244;
@@ -55,13 +58,17 @@ interface ParsedKey {
 }
 
 const DETAIL_KEY = 'd:action';
-// The second action of every title, beside Play.
+// The second and third actions of every title, beside Play: the page inside
+// the app first, then the one that leaves it for the TV browser.
+const DETAIL_APP_KEY = 'd:app';
 const DETAIL_BROWSER_KEY = 'd:browser';
+const DETAIL_KEYS = [DETAIL_KEY, DETAIL_APP_KEY, DETAIL_BROWSER_KEY];
 
 function parseKey(key: string | null): ParsedKey | null {
   if (key === null) return null;
   if (key === DETAIL_KEY) return { region: 'detail', index: 0 };
-  if (key === DETAIL_BROWSER_KEY) return { region: 'detail', index: 1 };
+  if (key === DETAIL_APP_KEY) return { region: 'detail', index: 1 };
+  if (key === DETAIL_BROWSER_KEY) return { region: 'detail', index: 2 };
   const match = /^([gpt]):(\d+)$/.exec(key);
   if (!match) return null;
   return { region: match[1] === 'g' ? 'group' : match[1] === 'p' ? 'pin' : 'tile', index: Number(match[2]) };
@@ -90,6 +97,8 @@ export interface W3uHandlers {
   onCancelPlay: () => void;
   // A station that only plays on its own web page: the host opens the TV browser.
   onOpenInBrowser: (station: W3uStation) => void;
+  // The same page inside the app, in the Browser section.
+  onOpenInApp: (station: W3uStation) => void;
   pins?: W3uPins;
   // A short message the host shows as a toast.
   onNotice?: (message: string) => void;
@@ -112,11 +121,12 @@ function newLevel(label: string, url: string | null, groups: W3uGroup[], cut: W3
 }
 
 // The W3U Library: a group list beside a poster grid of that group's titles,
-// and a detail screen with Play and Open in TV browser actions on every title.
+// and a detail screen with Play, Open in app browser and Open in TV browser
+// actions on every title.
 // Play on a resolvable embed shows "Starting…" on the button until the host
-// settles; Open in TV browser never resolves. One focus scope
+// settles; the two browser actions never resolve. One focus scope
 // holds the focused group row, poster, or button; keys are plain indexes
-// (`g:2`, `t:15`, `d:action`, `d:browser`) because only the active group's grid exists.
+// (`g:2`, `t:15`, `d:action`, `d:app`, `d:browser`) because only the active group's grid exists.
 // A group row can link to another playlist: choosing it fetches that list
 // then (never before) and shows its titles in the same grid. A list that
 // has several groups or links of its own becomes one more level, whose rail
@@ -710,7 +720,9 @@ export class W3uView {
     else if (action === 'up') this.handlers.onRevealTabBar();
     else if (action === 'select') this.activate(this.focusScope.focusKey);
     else if (action === 'left' || action === 'right') {
-      this.request(action === 'right' ? DETAIL_BROWSER_KEY : DETAIL_KEY, 'key');
+      const at = DETAIL_KEYS.indexOf(this.focusScope.focusKey ?? DETAIL_KEY);
+      const next = DETAIL_KEYS[Math.max(0, Math.min(DETAIL_KEYS.length - 1, at + (action === 'right' ? 1 : -1)))];
+      this.request(next, 'key');
     }
   }
 
@@ -735,10 +747,14 @@ export class W3uView {
     this.request(`t:${this.detailReturn}`, this.placementVia());
   }
 
-  // Both actions wait while a Play is starting, so only one attempt runs.
+  // Every action waits while a Play is starting, so only one attempt runs.
   private activate(key: string | null): void {
     const station = this.detail;
     if (!station || this.starting) return;
+    if (key === DETAIL_APP_KEY) {
+      this.handlers.onOpenInApp(station);
+      return;
+    }
     if (key === DETAIL_BROWSER_KEY) {
       this.handlers.onOpenInBrowser(station);
       return;
@@ -994,6 +1010,10 @@ export class W3uView {
                     data-focusable data-key="${DETAIL_KEY}" aria-busy="${busy ? 'true' : 'false'}">
               <span class="detail-btn-icon">${busy ? '' : raw(PLAY_ICON)}</span>
               <span>${t(busy ? 'w3u.starting' : 'catalog.play')}</span>
+            </button>
+            <button class="detail-btn" type="button" data-focusable data-key="${DETAIL_APP_KEY}">
+              <span class="detail-btn-icon w3u-glyph">${raw(APP_BROWSER_ICON)}</span>
+              <span>${t('w3u.openInApp')}</span>
             </button>
             <button class="detail-btn" type="button" data-focusable data-key="${DETAIL_BROWSER_KEY}">
               <span class="detail-btn-icon w3u-glyph">${raw(GLOBE_ICON)}</span>

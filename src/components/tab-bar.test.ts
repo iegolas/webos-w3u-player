@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Action, PlaylistEntry } from '../types';
-import { TabBar, SEARCH_INPUT_MAX_WIDTH } from './tab-bar';
+import { TabBar, SEARCH_INPUT_MAX_WIDTH, sectionForView } from './tab-bar';
 import { Focus, Tier } from '../navigation/focus-scope';
 
 let onSwitch: ReturnType<typeof vi.fn>;
@@ -180,6 +180,56 @@ describe('TabBar', () => {
     press('left');
     expect(onSwitch).toHaveBeenLastCalledWith('live');
     expect(onSwitch).not.toHaveBeenCalledWith('epg');
+  });
+
+  describe('Browser tab', () => {
+    it('sits right after the Library, and only while a Library is loaded', () => {
+      bar.setSections(true, true);
+      expect(items()).toEqual(['Live', 'Guide', 'Movies', 'Series', 'Library', 'Browser', 'Settings', 'Search']);
+      bar.setSections(false, true);
+      expect(items()).toEqual(['Live', 'Guide', 'Library', 'Browser', 'Settings', 'Search']);
+      bar.setSections(true, false);
+      expect(items()).not.toContain('Browser');
+      expect(items()).not.toContain('Library');
+      expect(document.querySelector('[data-section="browser"]')).toBeNull();
+    });
+
+    it('maps to the browser view, and falls back to Live when the Library goes away under it', () => {
+      expect(sectionForView('browser')).toBe('browser');
+      bar.setSections(false, true);
+      bar.setActive('browser');
+      expect(bar.activeSection).toBe('browser');
+      bar.setSections(false, false);
+      expect(bar.activeSection).toBe('live');
+    });
+
+    it('is reached with Right from the Library and switches live, with one ring', () => {
+      bar.setSections(false, true);
+      bar.setActive('w3u');
+      bar.focus();
+      expect(focusedLabel()).toBe('Library');
+      press('right');
+      expect(onSwitch).toHaveBeenLastCalledWith('browser');
+      expect(focusedLabel()).toBe('Browser');
+      expect(document.querySelectorAll('.tab-bar-item.focused')).toHaveLength(1);
+      press('right');
+      expect(onSwitch).toHaveBeenLastCalledWith('settings');
+    });
+
+    it('enters the view on Down and on a pointer click', () => {
+      bar.init();
+      bar.setSections(false, true);
+      bar.setActive('browser');
+      bar.focus();
+      press('down');
+      expect(onEnter).toHaveBeenLastCalledWith('browser', 'key');
+      const tab = document.querySelector<HTMLElement>('[data-section="browser"]')!;
+      const origFromPoint = document.elementFromPoint;
+      document.elementFromPoint = () => tab;
+      document.dispatchEvent(new MouseEvent('click', { clientX: 10, clientY: 10, bubbles: true }));
+      document.elementFromPoint = origFromPoint;
+      expect(onEnter).toHaveBeenLastCalledWith('browser', 'pointer');
+    });
   });
 
   it('clamps the active section to Live when switching to a set that lacks it', () => {
