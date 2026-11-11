@@ -25,12 +25,14 @@ const log = createLogger('TabBar');
 type SearchCollapseReason = 'toggle' | 'back' | 'escape' | 'dismiss' | 'hidden' | 'section-change';
 
 // The single source of truth for the sections: order, label, the view each maps
-// to, and whether it needs an Xtream account.
+// to, and whether it needs an Xtream account. The W3U Library tab shows only
+// while a W3U playlist is loaded.
 export const SECTIONS = [
   { id: 'live', labelKey: 'nav.live', view: 'channels', xtreamOnly: false },
   { id: 'epg', labelKey: 'nav.epg', view: 'epg', xtreamOnly: false },
   { id: 'movies', labelKey: 'nav.movies', view: 'movies', xtreamOnly: true },
   { id: 'series', labelKey: 'nav.series', view: 'series', xtreamOnly: true },
+  { id: 'w3u', labelKey: 'nav.w3u', view: 'w3u', xtreamOnly: false },
   { id: 'settings', labelKey: 'nav.settings', view: 'settings', xtreamOnly: false },
   { id: 'search', labelKey: 'nav.search', view: 'search', xtreamOnly: false },
 ] as const;
@@ -38,10 +40,11 @@ export const SECTIONS = [
 export type Section = typeof SECTIONS[number]['id'];
 type SectionDef = typeof SECTIONS[number];
 
-// Xtream accounts get the full set; M3U-only accounts have no VOD/series catalog,
-// so they see Live, Guide, Settings and Search only.
-const FULL_SECTIONS: readonly SectionDef[] = SECTIONS;
-const LITE_SECTIONS: readonly SectionDef[] = SECTIONS.filter((s) => !s.xtreamOnly);
+// Xtream accounts get the VOD/series sections; M3U-only accounts have no such
+// catalog, so they see Live, Guide, Settings and Search only.
+function sectionsFor(hasXtream: boolean, hasW3u: boolean): readonly SectionDef[] {
+  return SECTIONS.filter((s) => (hasXtream || !s.xtreamOnly) && (hasW3u || s.id !== 'w3u'));
+}
 
 // The section a view belongs to (null for the chromeless player / loading
 // views, which own no tab).
@@ -81,7 +84,7 @@ interface TabBarHandlers {
 export class TabBar {
   private el: HTMLElement | null = null;
   private handlers: TabBarHandlers;
-  private sections: readonly SectionDef[] = FULL_SECTIONS;
+  private sections: readonly SectionDef[] = sectionsFor(true, false);
   private hasXtream = true;
   private _shown = false;   // docked & visible on the current view
   private _focused = false; // holds input focus (ring + key capture)
@@ -156,9 +159,9 @@ export class TabBar {
     if (this._shown) this.render();
   }
 
-  setSections(hasXtream: boolean): void {
+  setSections(hasXtream: boolean, hasW3u = false): void {
     this.hasXtream = hasXtream;
-    this.sections = hasXtream ? FULL_SECTIONS : LITE_SECTIONS;
+    this.sections = sectionsFor(hasXtream, hasW3u);
     if (!this.sections.some((s) => s.id === this.active)) this.active = 'live';
     this.focusIndex = Math.max(0, this.sections.findIndex((s) => s.id === this.active));
     if (this._shown) this.render();

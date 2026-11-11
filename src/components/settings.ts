@@ -2317,10 +2317,10 @@ export class Settings {
     entries.appendChild(row);
     this.refreshManualEpgScopes();
 
-    const newInput = row.querySelector<HTMLElement>('input');
+    const newInput = row.querySelector<HTMLInputElement>('.playlist-url');
     if (newInput) {
       this.nav.focus(newInput);
-      (newInput as HTMLInputElement).focus();
+      newInput.focus();
     }
   }
 
@@ -2762,8 +2762,21 @@ export class Settings {
     const playlists: PlaylistEntry[] = [];
 
     for (const row of rows) {
-      const url = row.querySelector<HTMLInputElement>('.playlist-url')!.value.trim();
-      if (!url) continue;
+      const urlInput = row.querySelector<HTMLInputElement>('.playlist-url')!;
+      const nameInput = row.querySelector<HTMLInputElement>('.playlist-name')!;
+      const url = urlInput.value.trim();
+      if (!url) {
+        // A URL typed into the name field is a half-filled row, not a deleted
+        // one: keep the edit and say why instead of dropping the source.
+        const typed = nameInput.value.trim();
+        if (/^https?:\/\//i.test(typed)) {
+          showToast(t('settings.playlistUrlMissing', { name: typed.slice(0, 40) }));
+          this.nav.focus(urlInput);
+          urlInput.focus();
+          return;
+        }
+        continue;
+      }
       const name = row.querySelector<HTMLInputElement>('.playlist-name')!.value.trim();
       const entry: PlaylistEntry = {
         id: row.dataset.id || genPlaylistId(),

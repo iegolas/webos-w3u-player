@@ -18,6 +18,10 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 command -v node >/dev/null 2>&1 || error "Node.js is required. Install with: brew install node"
 command -v ares-package >/dev/null 2>&1 || error "ares-package not found. Install with: npm install -g @webos-tools/cli"
 
+# Launch/close by the id appinfo.json declares, so a renamed fork installs and
+# cold-starts its own package instead of the upstream one.
+APP_ID=$(node -p "require('./appinfo.json').id")
+
 # Install npm deps if needed
 if [ ! -d node_modules ]; then
   info "Installing dependencies..."
@@ -69,9 +73,9 @@ if [ "$1" = "--install" ]; then
   # relaunch resumes that stale in-memory copy — so close after installing, then
   # cold-start so the new bundle loads.
   info "Terminating stale instance..."
-  ares-launch --device "$DEVICE" --close com.lennylxx.iptv 2>/dev/null || true
+  ares-launch --device "$DEVICE" --close "$APP_ID" 2>/dev/null || true
   sleep 1
   info "Launching..."
-  ares-launch --device "$DEVICE" com.lennylxx.iptv
+  ares-launch --device "$DEVICE" "$APP_ID"
   info "Done! App is running on $DEVICE"
 fi

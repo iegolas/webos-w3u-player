@@ -29,6 +29,7 @@ export const TR_MESSAGES = {
   'nav.epg': 'TV Rehberi',
   'nav.movies': 'Filmler',
   'nav.series': 'Diziler',
+  'nav.w3u': 'Kütüphane',
   'nav.settings': 'Ayarlar',
   'nav.search': 'Ara',
   'nav.switchAccount': 'Hesap değiştir',
@@ -269,6 +270,7 @@ export const TR_MESSAGES = {
   'settings.url': 'URL',
   'settings.playlistName': 'Oynatma listesi adı',
   'settings.playlistUrl': 'Oynatma listesi URL’si',
+  'settings.playlistUrlMissing': 'Liste {name} için URL girip tekrar kaydedin.',
   'settings.myPlaylist': 'Oynatma Listem',
   'settings.playlistDefault': 'Oynatma Listesi {number}',
   'settings.noPlaylists': 'Henüz oynatma listesi eklenmedi',
@@ -527,4 +529,11 @@ export const TR_MESSAGES = {
   'liveCategories.loadError': 'Kategoriler yüklenemedi.',
   'liveCategories.tryAgain': 'Tekrar dene',
   'liveCategories.settingsHint': 'Yalnızca seçtiğiniz kategoriler yüklenir. Daha az kategori daha hızlı yüklenir.',
+  'w3u.titleCount': {
+    other: '{count} içerik',
+  },
+  'w3u.browserBadge': 'Tarayıcı',
+  'w3u.openInBrowser': 'TV tarayıcısında aç',
+  'w3u.browserNote': 'Bu içerik kendi web sitesinde oynatılır. İzlemek için TV tarayıcısında açın.',
+  'w3u.browserUnavailable': "TV tarayıcısı açılamadı.",
 } as const satisfies MessageCatalog;

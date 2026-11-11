@@ -209,7 +209,7 @@ describe('ares-inspect lifecycle', () => {
       const session = startNativeMetricWindow(10000, {
         spawn: (_file, args) => {
           expect(args[1]).toContain('WebAppMgr');
-          expect(args[1]).toContain("app_id='com.lennylxx.iptv'");
+          expect(args[1]).toContain("app_id='com.pablo.w3uplayer'");
           expect(args[1]).toContain('*"--app-id=$app_id"*');
           expect(args[1]).toContain('/proc/$p/oom_score');
           expect(args[1]).toContain('MemAvailable');
@@ -412,7 +412,7 @@ exit 23
     expect(command).toContain('temp_root=/media/developer/temp');
     expect(command).toContain('temp_root=/tmp');
     expect(command).toContain('if [ -e "$log" ] || [ -e "$log.1" ]; then cat "$log.1" "$log"');
-    expect(command).toContain('log="$temp_root/com.lennylxx.iptv.service.log"');
+    expect(command).toContain('log="$temp_root/com.pablo.w3uplayer.service.log"');
     expect(result).toEqual({ lines: ['line 1', 'line 2'], error: '' });
     expect(readServiceLog({
       execFile: () => { throw Object.assign(new Error('x'), { stderr: 'tv.sh: connection timed out\n' }); },

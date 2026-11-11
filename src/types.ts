@@ -125,6 +125,7 @@ export type PlaylistFormat =
   | 'hls-master'
   | 'hls-media'
   | 'simple-m3u'
+  | 'w3u'
   | 'xmltv'
   | 'json'
   | 'html'

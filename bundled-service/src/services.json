@@ -1,9 +1,9 @@
 {
-  "id": "com.lennylxx.iptv.service",
-  "description": "Bundled webOS JS service for the IPTV player",
+  "id": "com.pablo.w3uplayer.service",
+  "description": "Bundled webOS JS service for the W3U Player",
   "services": [
     {
-      "name": "com.lennylxx.iptv.service"
+      "name": "com.pablo.w3uplayer.service"
     }
   ]
 }

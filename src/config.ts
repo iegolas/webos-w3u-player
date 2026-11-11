@@ -1,6 +1,6 @@
 export const CONFIG = {
   APP_ID: __APP_ID__ as string,
-  APP_NAME: 'webOS IPTV Player',
+  APP_NAME: 'W3U Player',
   VERSION: __APP_VERSION__ as string,
 
   STORAGE_PREFIX: 'iptv_',
@@ -151,6 +151,24 @@ export const CONFIG = {
     RESUME_MAX_ITEMS: 50,                // Continue Watching entries per account and kind
     ARCHIVE_TTL_MS: 10 * 60 * 1000,      // per-channel get_simple_data_table freshness
     WATCHLIST_MAX_ITEMS: 200,            // per account and content type
+  },
+
+  // W3U Library: embed-host list and text limits for the station detail.
+  W3U: {
+    // Hosts that serve an HTML player page, not a media file. Matches the host
+    // itself and its subdomains.
+    EMBED_HOSTS: [
+      'ok.ru', 'uqload.com', 'uqload.to', 'uqload.io', 'upstream.to',
+      'listeamed.net', 'hlisteamed.net', 'hglink.to', 'streamtape.com',
+      'streamwish.to', 'vidhidefast.com', 'fastream.to', 'dsvplay.com',
+      'ds2play.com', 'ds2video.com', 'supervideo.cc', 'youtube.com',
+      'youtu.be', 'vimeo.com', 'dailymotion.com', 'dai.ly', 'pcloud.link',
+    ],
+    // Embed hosts whose page can be resolved to a direct stream by
+    // `services/embed-resolver.ts`, with the same host/subdomain matching.
+    RESOLVABLE_EMBED_HOSTS: ['ok.ru'],
+    SYNOPSIS_MAX_CHARS: 1200,
+    GENRES_MAX: 4,
   },
 
   // Catch-up (time-shift) resume and history store tuning.

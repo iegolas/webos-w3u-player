@@ -28,12 +28,15 @@ import { PlayerMenu } from './components/player-menu';
 import { TabBar, type Section, sectionForView } from './components/tab-bar';
 import { Movies } from './components/movies';
 import { Series } from './components/series';
+import { W3uView } from './components/w3u-view';
+import { classifyStation, hasW3uLibrary } from './components/w3u-model';
+import { isResolvableEmbedHost, resolveEmbedStream } from './services/embed-resolver';
 import { Search } from './components/search';
 import { SearchHistoryDropdown } from './components/search-history-dropdown';
 import { showToast } from './components/toast';
 import { showNumberEntry, hideNumberEntry } from './components/number-entry';
 import { ReminderService } from './services/reminder-service';
-import { ReminderPrompt } from './components/reminder-prompt';
+import { openInBrowser } from './services/browser-launch';import { ReminderPrompt } from './components/reminder-prompt';
 import { ReminderManager } from './components/reminder-manager';
 import { ParentalControls } from './components/parental-controls';
 import { ParentalPinPrompt } from './components/parental-pin-prompt';
@@ -45,7 +48,7 @@ import {
 import { setDisplayTz } from './utils/time';
 import { initTheme, applyTheme, applyOverlayStyle, applyTextSize } from './services/theme-service';
 import { applyAnimationMode } from './services/motion-service';
-import { channelKey } from './utils/channel';
+import { channelHttpHeaders, channelKey } from './utils/channel';
 import { isSourceEnabled } from './utils/playlist';
 import { truncate } from './utils/text';
 import { $, show, hide } from './utils/dom';
@@ -66,7 +69,7 @@ import { getLocale, initLocale, resolveLocale, setLocale, t, tp } from './i18n';
 const log = createLogger('App');
 
 type ViewName = 'channels' | 'player' | 'epg' | 'settings' | 'parental-controls' | 'reminders'
-  | 'loading' | 'movies' | 'series' | 'search';
+  | 'loading' | 'movies' | 'series' | 'w3u' | 'search';
 
 class App {
   private views!: Record<ViewName, HTMLElement>;
@@ -93,6 +96,10 @@ class App {
   private historyDropdown!: SearchHistoryDropdown;
   private movies!: Movies;
   private series!: Series;
+  private w3u!: W3uView;
+  // Set while a Library title plays, so Back returns to the Library, not Live.
+  private w3uReturn = false;
+  private w3uResolve: AbortController | null = null;
   private lastSearchQuery = '';
   private enterChannelsAfterUploadSync = false;
   private remindersInitialized = false;
@@ -134,6 +141,7 @@ class App {
       reminders: $('#view-reminders')!,
       movies: $('#view-movies')!,
       series: $('#view-series')!,
+      w3u: $('#view-w3u')!,
       search: $('#view-search')!,
       loading: $('#view-loading')!,
     };
@@ -160,6 +168,11 @@ class App {
       },
     );
     this.player = new Player(this.views.player, () => {
+      if (this.w3uReturn) {
+        this.showView('w3u');
+        this.w3u.resumeFocus();
+        return;
+      }
       this.channelList.render();
       this.showView('channels');
     }, (idx, catchupStart) => {
@@ -296,6 +309,17 @@ class App {
             this.series.refreshPlaybackState();
           },
         });
+      },
+    });
+    this.w3u = new W3uView(this.views.w3u, {
+      onRevealTabBar: () => this.leaveUp(),
+      onBack: () => this.goLive(),
+      onPlay: (channel) => this.playW3uChannel(channel),
+      onOpenInBrowser: (station) => {
+        // A host this resolver knows is attempted here first; the detail copy
+        // still says "Open in TV browser" until the Library lane updates it.
+        if (isResolvableEmbedHost(station.channel.url)) this.playW3uChannel(station.channel);
+        else this.openStationInBrowser(station.channel.url);
       },
     });
     this.search = new Search(this.views.search, {
@@ -877,7 +901,7 @@ class App {
       const xtreamAccounts = playlists
         .filter((playlist) =>
           playlist.source === 'xtream' && playlist.xtream && isSourceEnabled(playlist));
-      this.tabBar.setSections(xtreamAccounts.length > 0);
+      this.tabBar.setSections(xtreamAccounts.length > 0, hasW3uLibrary(PlaylistService.channels));
       this.tabBar.setAccounts(xtreamAccounts, this.activeXtreamAccount()?.id ?? '');
       this.channelList.render();
       this.sidebar.refresh();
@@ -950,7 +974,7 @@ class App {
 
       const hasXtream = StorageService.getPlaylists()
         .some((p) => p.source === 'xtream' && isSourceEnabled(p));
-      this.tabBar.setSections(hasXtream);
+      this.tabBar.setSections(hasXtream, hasW3uLibrary(PlaylistService.channels));
       const xtreamAccounts = StorageService.getPlaylists()
         .filter((p) => p.source === 'xtream' && p.xtream && isSourceEnabled(p));
       this.tabBar.setAccounts(xtreamAccounts, this.activeXtreamAccount()?.id ?? '');
@@ -1048,6 +1072,9 @@ class App {
       this.viewStack = ['settings'];
     }
     this.historyDropdown?.close('view-change');
+    if (name !== 'player') this.w3uReturn = false;
+    // Leaving the Library abandons a station that is still resolving.
+    if (name !== 'w3u' && name !== 'player') this.w3uResolve?.abort();
     this.livePreview?.beforeViewChange(name);
     if (name !== 'channels' && this.channelList.isEditing) this.channelList.exitEditMode();
     // Re-assert the persisted theme on every view transition. This reverts any
@@ -1139,6 +1166,11 @@ class App {
             err,
           ));
       }
+      return;
+    }
+    if (section === 'w3u') {
+      this.showView('w3u');
+      this.w3u.open(PlaylistService.channels);
       return;
     }
     if (section === 'settings') {
@@ -1323,6 +1355,10 @@ class App {
         (section === 'movies' ? this.movies : this.series).resumeFocus();
         return;
       }
+      if (section === 'w3u') {
+        this.w3u.resumeFocus();
+        return;
+      }
       // A view scope without keys of its own (a plain `view.*`) has nothing to resume.
       const owner = Focus.owner();
       if (owner?.logical) owner.enter('resume');
@@ -1454,7 +1490,58 @@ class App {
   }
 
   private playChannel(index: number, catchup?: CatchupInfo, scope: ChannelScope | null = null): void {
+    this.w3uReturn = false;
     this.player.play(index, catchup, scope, false);
+  }
+
+  // A W3U station's Play: a resolvable embed page is read through the bundled
+  // service and the stream it advertises plays as a live channel. Anything
+  // else keeps the old paths: direct media plays, other embeds open in the TV
+  // browser.
+  private playW3uChannel(channel: Channel): void {
+    const index = PlaylistService.indexOf(channel);
+    if (index < 0) return;
+    if (classifyStation(channel) !== 'embed' || !isResolvableEmbedHost(channel.url)) {
+      this.startW3uChannel(index);
+      return;
+    }
+    this.w3uResolve?.abort();
+    const controller = new AbortController();
+    this.w3uResolve = controller;
+    void resolveEmbedStream(channel.url, channelHttpHeaders(channel), { signal: controller.signal })
+      .then((result) => {
+        if (this.w3uResolve === controller) this.w3uResolve = null;
+        // A Back out of the Library abandons the attempt, whatever it returns.
+        if (controller.signal.aborted) return;
+        if (result.ok) {
+          // A playlist refresh while resolving may have renumbered the list.
+          const current = PlaylistService.indexOf(channel);
+          if (current >= 0) {
+            this.player.play(current, undefined, null, false, {
+              url: result.url,
+              headers: result.headers,
+            });
+            this.w3uReturn = true;
+          }
+          return;
+        }
+        if (result.reason === 'aborted') return;
+        this.openStationInBrowser(channel.url);
+      });
+  }
+
+  private startW3uChannel(index: number): void {
+    this.playChannel(index);
+    // After playChannel, which clears the flag for every other caller.
+    this.w3uReturn = true;
+  }
+
+  // Placeholder: the TV browser launch is wired separately. Until it claims
+  // this hook, tell the viewer instead of doing nothing.
+  private openStationInBrowser(url: string): void {
+    void openInBrowser(url).then((opened) => {
+      if (!opened) showToast(t('w3u.browserUnavailable'));
+    });
   }
 
   private bindReminderLifecycle(): void {
@@ -1551,6 +1638,7 @@ class App {
       'parental-controls': this.parentalControls.focusScope,
       movies: this.movies.focusScope,
       series: this.series.focusScope,
+      w3u: this.w3u.focusScope,
       search: this.search.focusScope,
       reminders: this.reminderManager.focusScope,
     };
@@ -1638,13 +1726,15 @@ class App {
         } else if (this.menu.visible) {
           // Let the menu step out of its audio sub-menu before closing.
           if (!this.menu.handleBack()) this.menu.hide();
-        } else if (!this.player.hideOsdForBack() && !this.livePreview.returnFromFullscreen(true)) {
+        } else if (!this.player.hideOsdForBack()
+            && (this.w3uReturn || !this.livePreview.returnFromFullscreen(true))) {
           this.player.handleAction('back');
         }
         return;
       }
       if (currentView === 'movies') { this.movies.handleAction('back'); return; }
       if (currentView === 'series') { this.series.handleAction('back'); return; }
+      if (currentView === 'w3u') { this.w3u.handleAction('back'); return; }
       if (currentView === 'search') { this.search.handleAction('back'); return; }
       if (currentView === 'epg') {
         if (this.epgGrid.isFilterOpen) {
@@ -1699,6 +1789,9 @@ class App {
         break;
       case 'series':
         this.series.handleAction(action);
+        break;
+      case 'w3u':
+        this.w3u.handleAction(action);
         break;
       case 'search':
         this.search.handleAction(action);

@@ -18,7 +18,7 @@ import {
 } from './cdp-logs.mjs';
 import { formatOptions, parseArgs } from './cli-args.mjs';
 
-const DEFAULT_APP_ID = 'com.lennylxx.iptv';
+const DEFAULT_APP_ID = 'com.pablo.w3uplayer';
 const DEFAULT_PORT = 9998;
 const DEFAULT_TIMEOUT_MS = 30000;
 const DEFAULT_DURATION_MS = 15000;
@@ -1470,7 +1470,7 @@ export function runNativeProbe(url, { execFile = execFileSync } = {}) {
 export function readServiceLog({ execFile = execFileSync } = {}) {
   const command = [
     SERVICE_LOG_TEMP_ROOT,
-    'log="$temp_root/com.lennylxx.iptv.service.log"',
+    'log="$temp_root/com.pablo.w3uplayer.service.log"',
     'if [ -e "$log" ] || [ -e "$log.1" ]; then'
       + ` cat "$log.1" "$log" 2>/dev/null | tail -n ${String(SERVICE_LOG_LINES)};`
       + ` else echo ${NO_SERVICE_LOG}; fi`,

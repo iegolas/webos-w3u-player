@@ -28,6 +28,7 @@ export const DE_MESSAGES = {
   'nav.epg': 'Programm',
   'nav.movies': 'Filme',
   'nav.series': 'Serien',
+  'nav.w3u': 'Bibliothek',
   'nav.settings': 'Einstellungen',
   'nav.search': 'Suchen',
   'nav.switchAccount': 'Konto wechseln',
@@ -275,6 +276,7 @@ export const DE_MESSAGES = {
   'settings.url': 'URL',
   'settings.playlistName': 'Name der Wiedergabeliste',
   'settings.playlistUrl': 'URL der Wiedergabeliste',
+  'settings.playlistUrlMissing': 'Bitte die Playlist-URL für {name} eingeben und erneut speichern.',
   'settings.myPlaylist': 'Meine Wiedergabeliste',
   'settings.playlistDefault': 'Wiedergabeliste {number}',
   'settings.noPlaylists': 'Noch keine Wiedergabelisten hinzugefügt',
@@ -542,4 +544,12 @@ export const DE_MESSAGES = {
   'liveCategories.loadError': 'Kategorien konnten nicht geladen werden.',
   'liveCategories.tryAgain': 'Erneut versuchen',
   'liveCategories.settingsHint': 'Nur ausgewählte Kategorien werden geladen. Weniger Kategorien laden schneller.',
+  'w3u.titleCount': {
+    one: '{count} Titel',
+    other: '{count} Titel',
+  },
+  'w3u.browserBadge': 'Browser',
+  'w3u.openInBrowser': 'Im TV-Browser öffnen',
+  'w3u.browserNote': 'Dieser Titel wird auf einer eigenen Website abgespielt. Öffnen Sie ihn im TV-Browser, um ihn anzusehen.',
+  'w3u.browserUnavailable': "Der TV-Browser konnte nicht geöffnet werden.",
 } satisfies MessageCatalog;

@@ -4,6 +4,7 @@ import {
   parseM3UBytes,
   type M3UParseOptions,
 } from './m3u-parser';
+import { createW3UStreamSink } from './w3u-parser';
 import {
   createXtreamLiveMatcher,
 } from '../utils/xtream-live-match';
@@ -232,7 +233,13 @@ export async function fetchAndParseM3UInWorker(
       data = parseM3UBytes(bytes, request.url, options);
     } else {
       const parser = new M3UStreamParser(request.url, options);
-      const decoder = new PlaylistStreamDecoder(text => parser.write(text));
+      // A W3U list is JSON and must be read whole; sniff and divert before the
+      // incremental M3U parser sees it.
+      const w3u = createW3UStreamSink(text => parser.write(text), request.url, {
+        maxChannels: options.maxChannels,
+        maxIssues: options.maxIssues,
+      });
+      const decoder = new PlaylistStreamDecoder(text => w3u.write(text));
       while (true) {
         stage = 'read';
         const next = await reader.read();
@@ -250,7 +257,8 @@ export async function fetchAndParseM3UInWorker(
       stage = 'decode_parse';
       decoder.finish();
       stage = 'finish';
-      data = parser.finish();
+      const w3uPlaylist = w3u.finish();
+      data = w3uPlaylist ?? parser.finish();
     }
     emitM3UProgress(true);
     const channelsKept = data.channels.length + emittedChannels;

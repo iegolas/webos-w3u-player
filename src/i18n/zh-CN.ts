@@ -28,6 +28,7 @@ export const ZH_CN_MESSAGES = {
   'nav.epg': '节目指南',
   'nav.movies': '电影',
   'nav.series': '剧集',
+  'nav.w3u': '媒体库',
   'nav.settings': '设置',
   'nav.search': '搜索',
   'nav.switchAccount': '切换账号',
@@ -269,6 +270,7 @@ export const ZH_CN_MESSAGES = {
   'settings.url': '网址',
   'settings.playlistName': '播放列表名称',
   'settings.playlistUrl': '播放列表网址',
+  'settings.playlistUrlMissing': '请输入 {name} 的播放列表 URL，然后再次保存。',
   'settings.myPlaylist': '我的播放列表',
   'settings.playlistDefault': '播放列表 {number}',
   'settings.noPlaylists': '尚未添加播放列表',
@@ -527,4 +529,11 @@ export const ZH_CN_MESSAGES = {
   'liveCategories.loadError': '无法加载分类。',
   'liveCategories.tryAgain': '重试',
   'liveCategories.settingsHint': '只加载选中的分类。分类越少，加载越快。',
+  'w3u.titleCount': {
+    other: '共 {count} 项',
+  },
+  'w3u.browserBadge': '浏览器',
+  'w3u.openInBrowser': '在电视浏览器中打开',
+  'w3u.browserNote': '此内容需在其所在网页播放。请在电视浏览器中打开观看。',
+  'w3u.browserUnavailable': "无法打开电视浏览器。",
 } satisfies MessageCatalog;

@@ -28,6 +28,7 @@ export const IT_MESSAGES = {
   'nav.epg': 'Guida',
   'nav.movies': 'Film',
   'nav.series': 'Serie',
+  'nav.w3u': 'Libreria',
   'nav.settings': 'Impostazioni',
   'nav.search': 'Cerca',
   'nav.switchAccount': 'Cambia account',
@@ -274,6 +275,7 @@ export const IT_MESSAGES = {
   'settings.url': 'URL',
   'settings.playlistName': 'Nome playlist',
   'settings.playlistUrl': 'URL playlist',
+  'settings.playlistUrlMissing': "Inserisci l'URL della lista {name} e salva di nuovo.",
   'settings.myPlaylist': 'La mia playlist',
   'settings.playlistDefault': 'Playlist {number}',
   'settings.noPlaylists': 'Nessuna playlist aggiunta',
@@ -540,4 +542,12 @@ export const IT_MESSAGES = {
   'liveCategories.loadError': 'Impossibile caricare le categorie.',
   'liveCategories.tryAgain': 'Riprova',
   'liveCategories.settingsHint': 'Vengono caricate solo le categorie selezionate. Meno categorie, caricamento più rapido.',
+  'w3u.titleCount': {
+    one: '{count} titolo',
+    other: '{count} titoli',
+  },
+  'w3u.browserBadge': 'Browser',
+  'w3u.openInBrowser': 'Apri nel browser della TV',
+  'w3u.browserNote': 'Questo titolo viene riprodotto sul suo sito web. Aprilo nel browser della TV per guardarlo.',
+  'w3u.browserUnavailable': "Impossibile aprire il browser del televisore.",
 } satisfies MessageCatalog;

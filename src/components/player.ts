@@ -69,6 +69,13 @@ interface LunaResume {
   paused: boolean;
 }
 
+/** A direct stream resolved for a live channel, e.g. an embed page.
+ *  It outlives reloads, rebinds, and resume until the next tune-in. */
+export interface LiveSource {
+  url: string;
+  headers: Record<string, string>;
+}
+
 // A coarse position for diagnostics, in 10 s steps.
 function secondsBucket(seconds: number): string {
   return Number.isFinite(seconds) && seconds > 0 ? String(Math.floor(seconds / 10) * 10) : '0';
@@ -89,6 +96,7 @@ export class Player {
   private playbackRate: PlaybackRateController;
   private osd: PlayerOsd;
   private currentChannel: Channel | null = null;
+  private currentSource: LiveSource | null = null;
   private currentIndex = -1;
   private currentIndexAnchor = -1;
   // The view (group/playlist) the current channel was launched from, if any —
@@ -754,11 +762,15 @@ export class Player {
   // scope: omit to keep whatever scope is already playing (channelUp/Down's
   // own internal calls do this); pass a ChannelScope to set a new one, or
   // null to explicitly clear it (e.g. a global number-entry jump).
+  // source: a direct stream resolved for this channel (an embed page); it
+  // replaces the channel's URL for this and every later reload until the next
+  // tune-in, which passes no source.
   play(
     channelIndex: number,
     catchup?: CatchupInfo,
     scope?: ChannelScope | null,
     preview = this.livePreviewMode,
+    source?: LiveSource,
   ): void {
     const channel = PlaylistService.getByIndex(channelIndex);
     if (!channel || !this.videoEl) {
@@ -767,7 +779,10 @@ export class Player {
     }
     this.authorizeLive(
       channel,
-      () => this.playResolved(channel, channelIndex, catchup, scope),
+      () => {
+        this.currentSource = source || null;
+        this.playResolved(channel, channelIndex, catchup, scope);
+      },
       preview,
     );
   }
@@ -839,12 +854,13 @@ export class Player {
       exact: channelExactStreamKey(channel),
     });
 
-    const url = this.resolveStreamUrl(channel, catchup || null);
+    const url = this.currentSource?.url ?? this.resolveStreamUrl(channel, catchup || null);
     if (catchup) log.debug('catchup URL:', diagnosticStreamUrl(url));
 
     this.videoEl.classList.add('active');
     this.onPlaybackStateChanged();
-    this.loadStream(url, channel.extras, { headers: channelHttpHeaders(channel) });
+    this.loadStream(url, channel.extras,
+      { headers: this.currentSource?.headers ?? channelHttpHeaders(channel) });
     this.showOSD();
     if (!this.livePreviewMode) show(this.container);
     this.stallWatchdog.start(isWebOS(), StorageService.getLiveReconnectAttempts());
@@ -1058,9 +1074,9 @@ export class Player {
     this.recreateVideoEl();
     this.videoEl?.classList.add('active');
     this.loadStream(
-      this.resolveStreamUrl(this.currentChannel, this.catchupInfo),
+      this.currentSource?.url ?? this.resolveStreamUrl(this.currentChannel, this.catchupInfo),
       this.currentChannel.extras,
-      { headers: channelHttpHeaders(this.currentChannel), reload: true },
+      { headers: this.currentSource?.headers ?? channelHttpHeaders(this.currentChannel), reload: true },
     );
   }
 
@@ -1107,6 +1123,7 @@ export class Player {
     this.userPaused = false;
     this.lunaResume = null;
     this.lunaRestore = null;
+    this.currentSource = null;
     this.startPlaybackGeneration();
     this.clearUpNextTimer();
     this.vodTracksLatePending = false;
@@ -1343,9 +1360,9 @@ export class Player {
         this.recreateVideoEl();
         this.videoEl?.classList.add('active');
         this.loadStream(
-          this.resolveStreamUrl(this.currentChannel, this.catchupInfo),
+          this.currentSource?.url ?? this.resolveStreamUrl(this.currentChannel, this.catchupInfo),
           this.currentChannel.extras,
-          { headers: channelHttpHeaders(this.currentChannel) },
+          { headers: this.currentSource?.headers ?? channelHttpHeaders(this.currentChannel) },
         );
         return;
       }

@@ -474,6 +474,27 @@ describe('Settings.render', () => {
       .toBe('http://epg');
   });
 
+  it('puts focus in the URL field of a newly added playlist row', () => {
+    settings.render();
+    click('#add-playlist');
+    const rows = container.querySelectorAll<HTMLElement>('#playlist-entries .settings-row:not(.playlist-header-row)');
+    const urlInput = rows[rows.length - 1].querySelector<HTMLInputElement>('.playlist-url');
+    expect(document.activeElement).toBe(urlInput);
+  });
+
+  it('keeps a URL typed into the name field and points at the URL field', () => {
+    settings.render();
+    click('#add-playlist');
+    const names = container.querySelectorAll<HTMLInputElement>('.playlist-name');
+    const last = names[names.length - 1];
+    last.value = 'http://host/list.w3u';
+
+    click('#save-settings');
+
+    expect(storageMock.setPlaylists).not.toHaveBeenCalled();
+    expect(toastMock.showToast).toHaveBeenCalled();
+  });
+
   it('uses type="url" on URL inputs so the webOS keyboard shows URL keys', () => {
     state.playlists = [
       { id: 'p1', name: 'P1', url: 'http://a', source: 'url' },

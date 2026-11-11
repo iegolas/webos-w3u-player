@@ -10,6 +10,7 @@ import {
   xtreamCredentialsFromLiveUrl,
 } from '../utils/xtream-url';
 import { isMpdText } from '../utils/url';
+import { detectW3UFormat, isW3UDocument, parseW3U } from './w3u-parser';
 
 export interface M3UParseOptions {
   maxChannels?: number;
@@ -43,6 +44,12 @@ export function parseM3U(
   sourceUrl = '',
   options: M3UParseOptions = {},
 ): ParsedPlaylist {
+  if (isW3UDocument(input)) {
+    return parseW3U(input, sourceUrl, {
+      maxChannels: options.maxChannels,
+      maxIssues: options.maxIssues,
+    });
+  }
   const parser = new M3UStreamParser(sourceUrl, options);
   parser.writeComplete(input);
   return parser.finish();
@@ -535,7 +542,9 @@ function isWrappedStreamFormat(format: ParsedPlaylist['format']): boolean {
 }
 
 function isWrongDocumentFormat(format: ParsedPlaylist['format']): boolean {
-  return format === 'xmltv' || format === 'json' || format === 'html';
+  // 'w3u' belongs here too: the stream parser cannot read a JSON list, and a
+  // caller that bypassed the W3U dispatch must fail cleanly, not emit garbage.
+  return format === 'xmltv' || format === 'json' || format === 'w3u' || format === 'html';
 }
 
 const CHANNEL_STRING_KEYS = [
@@ -658,6 +667,8 @@ export function detectPlaylistFormat(input: string): PlaylistFormatDetection {
     return { format: 'html', confidence: 0.95, reason: 'HTML document', hadBom };
   }
   if (trimmed.charCodeAt(0) === 123 || trimmed.charCodeAt(0) === 91) {
+    const w3u = detectW3UFormat(input);
+    if (w3u) return w3u;
     return { format: 'json', confidence: 0.8, reason: 'JSON document', hadBom };
   }
   if (/^#EXT-X-(?:STREAM-INF|I-FRAME-STREAM-INF):/im.test(sample)) {

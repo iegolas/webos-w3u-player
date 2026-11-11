@@ -32,6 +32,7 @@ export const EN_MESSAGES = {
   'nav.epg': 'Guide',
   'nav.movies': 'Movies',
   'nav.series': 'Series',
+  'nav.w3u': 'Library',
   'nav.settings': 'Settings',
   'nav.search': 'Search',
   'nav.switchAccount': 'Switch account',
@@ -277,6 +278,7 @@ export const EN_MESSAGES = {
   'settings.url': 'URL',
   'settings.playlistName': 'Playlist name',
   'settings.playlistUrl': 'Playlist URL',
+  'settings.playlistUrlMissing': 'Enter the playlist URL for {name}, then save again.',
   'settings.myPlaylist': 'My Playlist',
   'settings.playlistDefault': 'Playlist {number}',
   'settings.noPlaylists': 'No playlists added yet',
@@ -544,6 +546,14 @@ export const EN_MESSAGES = {
   'liveCategories.loadError': 'Couldn\'t load categories.',
   'liveCategories.tryAgain': 'Try again',
   'liveCategories.settingsHint': 'Load only the categories you select. Fewer categories load faster.',
+  'w3u.titleCount': {
+    one: '{count} title',
+    other: '{count} titles',
+  },
+  'w3u.browserBadge': 'Browser',
+  'w3u.openInBrowser': 'Open in TV browser',
+  'w3u.browserNote': 'This title plays on its own website. Open it in the TV browser to watch.',
+  'w3u.browserUnavailable': "Could not open the TV browser.",
 } as const;
 
 export type MessageKey = keyof typeof EN_MESSAGES;

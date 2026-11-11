@@ -1,0 +1,175 @@
+/* The W3U Library: a group list beside a poster grid, plus a detail screen.
+   Posters, tiles, and the detail controls reuse the catalog classes in
+   catalog-view.css, so a title looks the same here as in Movies. */
+
+.w3u-library {
+  display: flex;
+  box-sizing: border-box;
+  width: 1920px;
+  height: 100%;
+  padding: 40px 80px 0;
+}
+
+/* Rail: the group list. */
+.w3u-rail {
+  display: flex;
+  flex: 0 0 400px;
+  flex-direction: column;
+  min-height: 0;
+  margin-right: 48px;
+}
+.w3u-kicker {
+  margin-bottom: 20px;
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: 4px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+/* The padding and equal negative margin leave room for the focus ring. */
+.w3u-group-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 -12px;
+  padding: 8px 12px 40px;
+  overflow-y: auto;
+}
+.w3u-group-spacer { position: relative; width: 100%; }
+.w3u-group {
+  position: absolute;
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 76px;
+  padding: 0 20px;
+  border: 2px solid transparent;
+  border-radius: var(--radius);
+  font-size: 24px;
+  line-height: 1.2;
+  color: var(--text-secondary);
+}
+.w3u-group-label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow-wrap: break-word;
+}
+.w3u-group-count {
+  flex: 0 0 auto;
+  margin-left: 16px;
+  font-size: 20px;
+  color: var(--text-muted);
+}
+/* Selection is the open group: a bar and brighter text, apart from focus. */
+.w3u-group.active {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+.w3u-group.active::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 16px;
+  bottom: 16px;
+  width: 4px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+.w3u-group.focused {
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+/* Pane: the open group's title and poster grid. */
+.w3u-pane {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.w3u-pane-title {
+  flex: 0 0 auto;
+  margin: 0 0 16px;
+  font-size: 44px;
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.w3u-pane-count {
+  margin-left: 20px;
+  font-size: 26px;
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+.w3u-grid {
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 -16px;
+  padding: 16px 16px 40px;
+  overflow-y: auto;
+}
+
+/* A title that only plays on its own web page. */
+.w3u-badge {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 12px 4px 8px;
+  border-radius: 999px;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--text-primary);
+  background: rgb(var(--catalog-hero-scrim-rgb) / 0.82);
+}
+.w3u-badge .w3u-glyph { margin-right: 6px; }
+.w3u-glyph {
+  display: inline-flex;
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+}
+.w3u-glyph svg {
+  width: 100%;
+  height: 100%;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* Detail: the movie detail layout with a clamped synopsis and an embed note. */
+.w3u-synopsis {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 9;
+  overflow: hidden;
+  white-space: pre-line;
+}
+.w3u-note {
+  display: flex;
+  align-items: flex-start;
+  max-width: 1000px;
+  margin-top: 8px;
+  font-size: 24px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+.w3u-note .w3u-glyph {
+  width: 28px;
+  height: 28px;
+  margin: 2px 12px 0 0;
+  color: var(--text-muted);
+}
+.w3u-detail .detail-btn-icon.w3u-glyph { width: 28px; height: 28px; }
