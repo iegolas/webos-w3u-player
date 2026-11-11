@@ -5,6 +5,8 @@ import {
   type EpgSource,
   type LastChannel,
   type ParsedPlaylist,
+  type PinnedLiveGroup,
+  type PinnedSelection,
   type PlaylistGroupLink,
   type PlaylistTab,
 } from '../types';
@@ -35,7 +37,7 @@ import {
   type RankedSearchResult,
 } from '../utils/channel-search';
 import { createLogger } from '../utils/logger';
-import { StorageService } from './storage-service';
+import { StorageService, PINNED_SELECTIONS_MAX } from './storage-service';
 import { ChannelCustomizationService, groupKeyOf } from './channel-customization';
 import {
   createXtreamClient,
@@ -59,6 +61,9 @@ import {
   type XtreamGroupNameFilter,
 } from '../utils/xtream-category-filter';
 import { liveParentalRequest, ParentalControlService } from './parental-control';
+import { CONFIG } from '../config';
+import { canonicalUrl } from '../utils/url';
+import { W3U_LINK_LIMITS } from '../components/w3u-model';
 
 const log = createLogger('Playlist');
 
@@ -141,6 +146,84 @@ export interface ChannelCacheSource {
   selection: Uint32Array;
 }
 
+/** Why a pinned linked-list selection was refused or dropped. */
+export type PinnedLinkReason =
+  | 'invalid'
+  | 'depth'
+  | 'budget'
+  | 'limit'
+  | 'fetch_failed'
+  | 'group_missing'
+  | 'canceled'
+  | 'storage';
+
+export interface PinnedLinkNotice {
+  url: string;
+  group: string;
+  name: string;
+  reason: PinnedLinkReason;
+}
+
+export type GroupPinResult =
+  | { ok: true; channels: number }
+  | { ok: false; reason: PinnedLinkReason };
+
+/** `depth` is the list's level below the W3U Library root: a list opened
+ *  directly from it is 1, its own linked lists are 2, and so on. */
+export interface GroupPinRequest {
+  url: string;
+  group: string;
+  name: string;
+  depth: number;
+}
+
+export interface PinnedLinkEntry {
+  selection: PinnedSelection;
+  channels: Channel[];
+}
+
+function pinSelectionKey(url: string, group: string): string {
+  return `${canonicalUrl(url)}|${group}`;
+}
+
+// A synthetic tab id so overlay channels never look like they belong to a
+// configured playlist.
+function linkPlaylistId(url: string): string {
+  let hash = 2166136261;
+  const key = canonicalUrl(url);
+  for (let i = 0; i < key.length; i++) {
+    hash ^= key.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `link:${(hash >>> 0).toString(36)}`;
+}
+
+function nextFreeGroupName(name: string, used: Set<string>): string {
+  const base = name || UNCATEGORIZED_GROUP;
+  if (!used.has(base)) return base;
+  let suffix = 2;
+  while (used.has(`${base} ${suffix}`)) suffix++;
+  return `${base} ${suffix}`;
+}
+
+async function forEachConcurrent<T>(
+  items: readonly T[],
+  limit: number,
+  task: (item: T) => Promise<void>,
+): Promise<void> {
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.min(limit, items.length) },
+    async () => {
+      while (next < items.length) {
+        const item = items[next++];
+        await task(item);
+      }
+    },
+  );
+  await Promise.all(workers);
+}
+
 class PlaylistServiceImpl {
   /** Every parsed channel, hidden ones included. Edit mode reads this. */
   allChannels: Channel[] = [];
@@ -156,6 +239,15 @@ class PlaylistServiceImpl {
   /** Linked W3U sub-lists from enabled playlists, de-duplicated by url. */
   groupLinks: PlaylistGroupLink[] = [];
   groupLinksRevision = 0;
+  /** Session-only selected linked groups, keyed by canonical url + group. */
+  pinnedRevision = 0;
+  private readonly pinnedLinks = new Map<string, PinnedLinkEntry>();
+  private pinnedOverlay: Channel[] = [];
+  private pinnedLiveGroupMap: PinnedLiveGroup[] = [];
+  private readonly pinnedListCache = new Map<string, Map<string, Channel[]>>();
+  private readonly pinFetchTokens = new Map<string, number>();
+  private pinFetchSeq = 0;
+  private pinnedNotices: PinnedLinkNotice[] = [];
   playlistTabs: PlaylistTab[] = [];
   epgSources: EpgSource[] = [];
   private indexMap = new Map<Channel, number>(); // channel -> global index, O(1) indexOf
@@ -272,6 +364,7 @@ class PlaylistServiceImpl {
     this.groupsRevision++;
     this.groupLinks = [];
     this.groupLinksRevision++;
+    this.clearPinnedState();
     this.playlistTabs = [];
     this.epgSources = [];
     this.indexMap = new Map();
@@ -801,7 +894,88 @@ class PlaylistServiceImpl {
       this.channels = this.unconcealedChannels;
     }
     this.channelSourceIndices = sourceIndices.subarray(0, this.channels.length);
+    const base = this.channels;
+    this.channels = this.mergePinnedOverlay(base);
     this.buildDerivedIndexes();
+  }
+
+  // Pinned linked channels sit after the customized main list, so every main
+  // index stays put when a pin is added or removed.
+  private mergePinnedOverlay(base: Channel[]): Channel[] {
+    const used = new Set<string>();
+    const seen = new Set<string>();
+    for (const channel of base) {
+      if (channel.group) used.add(channel.group);
+      seen.add(channelKey(channel));
+    }
+    const overlay: Channel[] = [];
+    const mapped: PinnedLiveGroup[] = [];
+    this.pinnedLinks.forEach((entry) => {
+      const wholeList = !entry.selection.group;
+      const labels = new Map<string, string>();
+      let fixedLabel = '';
+      if (!wholeList) {
+        fixedLabel = nextFreeGroupName(entry.selection.name || entry.selection.group, used);
+        used.add(fixedLabel);
+      }
+      const playlistId = linkPlaylistId(entry.selection.url);
+      let added = false;
+      for (const channel of entry.channels) {
+        const key = channelKey(channel);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        let label = fixedLabel;
+        if (wholeList) {
+          const sourceLabel = channel.group || entry.selection.name;
+          label = labels.get(sourceLabel) ?? '';
+          if (!label) {
+            label = nextFreeGroupName(sourceLabel, used);
+            labels.set(sourceLabel, label);
+            used.add(label);
+          }
+        }
+        added = true;
+        overlay.push({
+          ...channel,
+          group: label,
+          groupKey: label,
+          playlistIds: [playlistId],
+        });
+      }
+      const selection = entry.selection;
+      if (wholeList) {
+        labels.forEach((label) => {
+          mapped.push({ group: label, url: selection.url, groupKey: '', name: selection.name });
+        });
+      } else if (added) {
+        mapped.push({
+          group: fixedLabel,
+          url: selection.url,
+          groupKey: selection.group,
+          name: selection.name,
+        });
+      }
+    });
+    const changed = this.pinnedStateChanged(mapped, overlay);
+    this.pinnedOverlay = overlay;
+    this.pinnedLiveGroupMap = mapped;
+    if (changed) this.pinnedRevision++;
+    return overlay.length ? base.concat(overlay) : base;
+  }
+
+  private pinnedStateChanged(mapped: readonly PinnedLiveGroup[], overlay: readonly Channel[]): boolean {
+    if (mapped.length !== this.pinnedLiveGroupMap.length
+        || overlay.length !== this.pinnedOverlay.length) return true;
+    for (let i = 0; i < mapped.length; i++) {
+      const next = mapped[i];
+      const prev = this.pinnedLiveGroupMap[i];
+      if (next.group !== prev.group || next.url !== prev.url
+          || next.groupKey !== prev.groupKey || next.name !== prev.name) return true;
+    }
+    for (let i = 0; i < overlay.length; i++) {
+      if (channelKey(overlay[i]) !== channelKey(this.pinnedOverlay[i])) return true;
+    }
+    return false;
   }
 
   /**
@@ -979,6 +1153,258 @@ class PlaylistServiceImpl {
   getGroupLinks(playlist?: string): PlaylistGroupLink[] {
     if (!playlist) return this.groupLinks.slice();
     return this.groupLinks.filter(link => link.playlistIds.includes(playlist));
+  }
+
+  // --- pinned linked groups ---
+
+  hasPinnedLinkNotices(): boolean {
+    return this.pinnedNotices.length > 0;
+  }
+
+  /** Pins that failed or vanished since the last call, each returned once. */
+  takePinnedLinkNotices(): PinnedLinkNotice[] {
+    const notices = this.pinnedNotices;
+    this.pinnedNotices = [];
+    return notices;
+  }
+
+  pinnedSelections(): PinnedSelection[] {
+    return StorageService.getPinnedSelections();
+  }
+
+  isGroupPinned(url: string, group: string): boolean {
+    const key = pinSelectionKey(url, group);
+    return this.pinnedLinks.has(key)
+      || StorageService.getPinnedSelections().some(selection =>
+        pinSelectionKey(selection.url, selection.group) === key);
+  }
+
+  /** Each Live group produced by a pin, with the selection behind it. A group
+   *  name carries its collision suffix; a whole-list pin maps every group it adds. */
+  pinnedLiveGroups(): PinnedLiveGroup[] {
+    return this.pinnedLiveGroupMap.slice();
+  }
+
+  /** Unpins the selection behind a displayed Live group. A whole-list pin owns
+   *  several Live groups, so any one of them unpins the whole selection. */
+  async unpinLiveGroup(group: string): Promise<boolean> {
+    const mapped = this.pinnedLiveGroupMap.find(entry => entry.group === group);
+    if (!mapped) return false;
+    this.unpinSelection(pinSelectionKey(mapped.url, mapped.groupKey));
+    return true;
+  }
+
+  // Session-only: the live list falls back to the main playlist, but saved
+  // selections stay for the next explicit pin. `reset()` clears the overlay too.
+  clearPinnedChannels(): void {
+    this.clearPinnedState();
+    this.applyCustomization();
+  }
+
+  /** Applies an already-fetched entry; null removes one. Storage is untouched. */
+  setPinnedChannels(selectionKey: string, entry: PinnedLinkEntry | null): void {
+    if (entry) this.pinnedLinks.set(selectionKey, entry);
+    else this.pinnedLinks.delete(selectionKey);
+    this.applyCustomization();
+    this.pinnedRevision++;
+  }
+
+  /** Fetches each distinct pinned list once, two at a time, then adds only
+   *  the pins that still exist. Called once at startup. */
+  async loadPinnedSelections(): Promise<void> {
+    const selections = StorageService.getPinnedSelections();
+    if (!selections.length) return;
+    // Rebuild from storage: a second call replaces the session overlay instead
+    // of treating its own channels as duplicates.
+    this.pinnedLinks.clear();
+    this.pinnedOverlay = [];
+    this.pinnedNotices = [];
+    this.applyCustomization();
+    this.pinnedRevision++;
+    const byUrl = new Map<string, PinnedSelection[]>();
+    for (const selection of selections) {
+      const url = canonicalUrl(selection.url);
+      const list = byUrl.get(url) ?? [];
+      list.push(selection);
+      byUrl.set(url, list);
+    }
+    const outcomes = new Map<string, Map<string, Channel[]> | null>();
+    await forEachConcurrent(Array.from(byUrl.keys()), 2, async (url) => {
+      try {
+        outcomes.set(url, await this.fetchPinnedList(url));
+      } catch {
+        outcomes.set(url, null);
+      }
+    });
+    byUrl.forEach((listSelections, url) => {
+      const groups = outcomes.get(url) ?? null;
+      if (!groups) {
+        for (const selection of listSelections) this.reportPinnedNotice(selection, 'fetch_failed');
+        return;
+      }
+      for (const selection of listSelections) {
+        const key = pinSelectionKey(selection.url, selection.group);
+        if (selection.group && !groups.has(selection.group)) {
+          this.removePinnedSelection(selection);
+          this.reportPinnedNotice(selection, 'group_missing');
+          continue;
+        }
+        const raw = this.pinnedChannelsFor(groups, selection);
+        if (!raw.length) {
+          this.removePinnedSelection(selection);
+          this.reportPinnedNotice(selection, 'group_missing');
+          continue;
+        }
+        const channels = this.uniquePinnedChannels(raw);
+        if (this.pinnedOverlay.length + channels.length > CONFIG.W3U.LIVE_LINK_TITLES) {
+          this.reportPinnedNotice(selection, 'budget');
+          continue;
+        }
+        this.setPinnedChannels(key, { selection, channels });
+      }
+    });
+  }
+
+  async setGroupPinned(
+    request: GroupPinRequest,
+    pinned: boolean,
+  ): Promise<GroupPinResult> {
+    const url = request.url.trim();
+    const group = typeof request.group === 'string' ? request.group : '';
+    const name = (request.name || '').trim() || group;
+    if (!url || !name) return { ok: false, reason: 'invalid' };
+    const key = pinSelectionKey(url, group);
+    if (!pinned) {
+      this.unpinSelection(key);
+      return { ok: true, channels: 0 };
+    }
+    if (!Number.isInteger(request.depth)
+        || request.depth < 1
+        || request.depth > W3U_LINK_LIMITS.MAX_DEPTH) {
+      return { ok: false, reason: 'depth' };
+    }
+    const existing = this.pinnedLinks.get(key);
+    if (existing) return { ok: true, channels: existing.channels.length };
+    const token = this.beginPinFetch(key);
+    let groups: Map<string, Channel[]>;
+    try {
+      groups = await this.fetchPinnedList(url);
+    } catch {
+      if (this.pinFetchTokens.get(key) === token) this.pinFetchTokens.delete(key);
+      return { ok: false, reason: 'fetch_failed' };
+    }
+    if (this.pinFetchTokens.get(key) !== token) return { ok: false, reason: 'canceled' };
+    this.pinFetchTokens.delete(key);
+    if (group && !groups.has(group)) return { ok: false, reason: 'group_missing' };
+    const raw = this.pinnedChannelsFor(groups, { group });
+    if (!raw.length) return { ok: false, reason: 'group_missing' };
+    const channels = this.uniquePinnedChannels(raw);
+    if (this.pinnedOverlay.length + channels.length > CONFIG.W3U.LIVE_LINK_TITLES) {
+      return { ok: false, reason: 'budget' };
+    }
+    const selection: PinnedSelection = {
+      url: canonicalUrl(url),
+      group,
+      name,
+      pinnedAt: Date.now(),
+    };
+    const selections = StorageService.getPinnedSelections().filter(entry =>
+      pinSelectionKey(entry.url, entry.group) !== key);
+    if (selections.length >= PINNED_SELECTIONS_MAX) return { ok: false, reason: 'limit' };
+    if (!StorageService.setPinnedSelections(selections.concat(selection))) {
+      return { ok: false, reason: 'storage' };
+    }
+    this.setPinnedChannels(key, { selection, channels });
+    return { ok: true, channels: channels.length };
+  }
+
+  private unpinSelection(key: string): void {
+    this.pinFetchTokens.delete(key);
+    const selections = StorageService.getPinnedSelections();
+    const next = selections.filter(selection =>
+      pinSelectionKey(selection.url, selection.group) !== key);
+    if (next.length !== selections.length) StorageService.setPinnedSelections(next);
+    if (this.pinnedLinks.has(key)) this.setPinnedChannels(key, null);
+    else if (next.length !== selections.length) this.pinnedRevision++;
+  }
+
+  private beginPinFetch(key: string): number {
+    const token = ++this.pinFetchSeq;
+    this.pinFetchTokens.set(key, token);
+    return token;
+  }
+
+  private async fetchPinnedList(url: string): Promise<Map<string, Channel[]>> {
+    const cacheKey = canonicalUrl(url);
+    const cached = this.pinnedListCache.get(cacheKey);
+    if (cached) return cached;
+    const parsed = (await fetchAndParseM3U(url.trim(), W3U_LINK_LIMITS.TIMEOUT_MS)).data;
+    const groups = new Map<string, Channel[]>();
+    const limit = Math.min(parsed.channels.length, W3U_LINK_LIMITS.MAX_STATIONS);
+    for (let i = 0; i < limit; i++) {
+      const channel = parsed.channels[i];
+      const list = groups.get(channel.group);
+      if (list) list.push(channel);
+      else groups.set(channel.group, [channel]);
+    }
+    this.pinnedListCache.set(cacheKey, groups);
+    return groups;
+  }
+
+  private pinnedChannelsFor(
+    groups: Map<string, Channel[]>,
+    selection: Pick<PinnedSelection, 'group'>,
+  ): Channel[] {
+    if (selection.group) return groups.get(selection.group) ?? [];
+    const all: Channel[] = [];
+    groups.forEach(list => all.push(...list));
+    return all;
+  }
+
+  private uniquePinnedChannels(channels: readonly Channel[]): Channel[] {
+    const seen = new Set<string>();
+    for (const channel of this.channels) seen.add(channelKey(channel));
+    for (const channel of this.pinnedOverlay) seen.add(channelKey(channel));
+    const unique: Channel[] = [];
+    for (const channel of channels) {
+      const key = channelKey(channel);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      unique.push(channel);
+    }
+    return unique;
+  }
+
+  private removePinnedSelection(selection: PinnedSelection): void {
+    const key = pinSelectionKey(selection.url, selection.group);
+    const selections = StorageService.getPinnedSelections();
+    const next = selections.filter(entry =>
+      pinSelectionKey(entry.url, entry.group) !== key);
+    if (next.length !== selections.length) StorageService.setPinnedSelections(next);
+    if (this.pinnedLinks.has(key)) this.setPinnedChannels(key, null);
+    else this.pinnedRevision++;
+  }
+
+  private reportPinnedNotice(selection: PinnedSelection, reason: PinnedLinkReason): void {
+    if (this.pinnedNotices.some(notice =>
+      notice.url === selection.url && notice.group === selection.group
+      && notice.reason === reason)) return;
+    this.pinnedNotices.push({
+      url: selection.url,
+      group: selection.group,
+      name: selection.name,
+      reason,
+    });
+  }
+
+  private clearPinnedState(): void {
+    this.pinnedLinks.clear();
+    this.pinnedOverlay = [];
+    this.pinnedLiveGroupMap = [];
+    this.pinnedListCache.clear();
+    this.pinFetchTokens.clear();
+    this.pinnedNotices = [];
+    this.pinnedRevision++;
   }
 
   getByGroup(group: ChannelGroupId, playlist?: string): Channel[] {

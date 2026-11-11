@@ -216,6 +216,21 @@ describe('StorageService', () => {
     expect(localStorage.getItem('iptv_live_preview')).toBeNull();
   });
 
+  it('defaults the Guide tab to on without writing a preference', () => {
+    expect(StorageService.getShowGuideTab()).toBe(true);
+    expect(localStorage.getItem('iptv_show_guide_tab')).toBeNull();
+  });
+
+  it('persists the Guide tab off and on, and keeps it on for a malformed value', () => {
+    StorageService.setShowGuideTab(false);
+    expect(localStorage.getItem('iptv_show_guide_tab')).toBe('false');
+    expect(StorageService.getShowGuideTab()).toBe(false);
+    StorageService.setShowGuideTab(true);
+    expect(StorageService.getShowGuideTab()).toBe(true);
+    localStorage.setItem('iptv_show_guide_tab', 'invalid');
+    expect(StorageService.getShowGuideTab()).toBe(true);
+  });
+
   it('validates and persists the animation mode', () => {
     expect(StorageService.getAnimationMode()).toBe('reduced');
     StorageService.setAnimationMode('full');
@@ -1444,5 +1459,71 @@ describe('StorageService Live category snapshots without IndexedDB', () => {
     expect(StorageService.getLiveCategorySnapshot('x1')).toEqual(snap);
     expect(StorageService.getLiveCategorySnapshot('x2')).toBeNull();
     expect(StorageService.getLiveCategorySnapshot('x3')).toBeNull();
+  });
+});
+
+describe('StorageService pinned linked groups', () => {
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('round-trips a selection under a canonical url', () => {
+    StorageService.setPinnedSelections([
+      {
+        url: 'HTTP://Host/List#section',
+        group: 'Sports',
+        name: 'Sports',
+        pinnedAt: 10,
+      },
+    ]);
+
+    expect(StorageService.getPinnedSelections()).toEqual([
+      { url: 'http://host/List', group: 'Sports', name: 'Sports', pinnedAt: 10 },
+    ]);
+  });
+
+  it('keeps one entry per url and group, preferring the newest write', () => {
+    StorageService.setPinnedSelections([
+      { url: 'http://host/a', group: 'G', name: 'Old', pinnedAt: 1 },
+      { url: 'http://host/a#x', group: 'G', name: 'New', pinnedAt: 2 },
+      { url: 'http://host/a', group: '', name: 'Whole', pinnedAt: 3 },
+    ]);
+
+    expect(StorageService.getPinnedSelections()).toEqual([
+      { url: 'http://host/a', group: 'G', name: 'New', pinnedAt: 2 },
+      { url: 'http://host/a', group: '', name: 'Whole', pinnedAt: 3 },
+    ]);
+  });
+
+  it('reads malformed stored data as no selections', () => {
+    localStorage.setItem('iptv_pinned_linked_groups', '{not json');
+    expect(StorageService.getPinnedSelections()).toEqual([]);
+
+    localStorage.setItem('iptv_pinned_linked_groups', JSON.stringify([
+      null,
+      3,
+      { url: 'ftp://host/a', group: 'G', name: 'G' },
+      { url: 'http://host/a', group: 'G', name: '', pinnedAt: 'soon' },
+    ]));
+
+    expect(StorageService.getPinnedSelections()).toEqual([
+      { url: 'http://host/a', group: 'G', name: 'G', pinnedAt: 0 },
+    ]);
+  });
+
+  it('caps at fifty entries, keeping the newest', () => {
+    StorageService.setPinnedSelections(
+      Array.from({ length: 55 }, (_, index) => ({
+        url: `http://host/${index}`,
+        group: 'G',
+        name: 'G',
+        pinnedAt: index,
+      })),
+    );
+
+    const stored = StorageService.getPinnedSelections();
+    expect(stored).toHaveLength(50);
+    expect(stored[0].pinnedAt).toBe(5);
+    expect(stored[49].pinnedAt).toBe(54);
   });
 });

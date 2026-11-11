@@ -10,6 +10,7 @@ import {
   type PlaybackRateState,
 } from '../services/playback-rate';
 import { Focus, type FocusScope, type Via } from '../navigation/focus-scope';
+import { StorageService } from '../services/storage-service';
 
 const AUTO_HIDE_MS = 5000;
 
@@ -374,7 +375,10 @@ export class PlayerMenu {
 
     const ch = this.getCurrentChannel();
     const chName = ch?.name || '';
-    const rows = ch ? MENU_ITEMS : VOD_MENU_ITEMS;
+    const showGuide = StorageService.getShowGuideTab();
+    const rows = ch
+      ? MENU_ITEMS.filter(item => showGuide || item.labelKey !== 'player.guide')
+      : VOD_MENU_ITEMS;
     const tracks = this.getAudioTracks();
     const activeTrack = tracks.find(t => t.active);
     const subtitles = this.getSubtitleTracks();

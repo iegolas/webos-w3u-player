@@ -181,3 +181,22 @@ export function sniffStreamContentType(contentType: string, prefix: Uint8Array):
     ? 'application/dash+xml'
     : type;
 }
+
+// The form two addresses are compared in, and the cache key: scheme and host
+// in lower case, no fragment. The path and query stay as written, because a
+// query can carry the credentials that separate one source from another.
+export function canonicalUrl(url: string): string {
+  const trimmed = url.trim();
+  try {
+    const parsed = new URL(trimmed);
+    parsed.hash = '';
+    return parsed.href;
+  } catch {
+    return trimmed
+      .replace(/#.*$/, '')
+      .replace(/^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*)/i, (_all, scheme: string, authority: string) => {
+        const at = authority.lastIndexOf('@');
+        return scheme.toLowerCase() + authority.slice(0, at + 1) + authority.slice(at + 1).toLowerCase();
+      });
+  }
+}

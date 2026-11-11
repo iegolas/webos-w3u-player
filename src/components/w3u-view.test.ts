@@ -1,10 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, describe, it, expect, beforeEach, vi } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { CONFIG } from '../config';
 import type { Action, Channel, PlaylistGroupLink, W3uGroupLink } from '../types';
 import { Focus } from '../navigation/focus-scope';
 import { fetchAndParseM3U } from '../parsers/m3u-loader';
-import { W3U_LINK_LIMITS } from './w3u-model';
+import { W3U_LINK_LIMITS, pinFailureCopy } from './w3u-model';
+import type { GroupPinRequest, GroupPinResult, PinnedLinkNotice, PinnedLinkReason } from '../services/playlist-service';
 import { W3uView, type W3uHandlers } from './w3u-view';
 
 vi.mock('../parsers/m3u-loader', () => ({ fetchAndParseM3U: vi.fn() }));
@@ -937,6 +940,428 @@ describe('W3uView linked playlists', () => {
       expect(focusedKeys()).toEqual(['g:1']);
       pressKey(view, 'back');
       expect(handlers.onBack).toHaveBeenCalledTimes(1);
+    });
+  });
+});
+
+describe('W3uView show in Live', () => {
+  const ONE = 'http://host/one.m3u';
+  const TWO = 'http://host/two.m3u';
+  const SUB = 'http://host/sub2.m3u';
+  const root = (): Channel[] => [station('Alpha', 'Group A')];
+  const links = (): PlaylistGroupLink[] => [link('Hub One', ONE), link('Hub Two', TWO)];
+  const films = (): Channel[] => [listed('Delta', 'Films'), listed('Echo', 'Series')];
+
+  let store: Set<string>;
+  let revision: number;
+  let waiting: PinnedLinkNotice[];
+  let notice: ReturnType<typeof vi.fn>;
+  let setPinned: ReturnType<typeof vi.fn>;
+
+  const slot = (url: string, group: string): string => `${url}|${group}`;
+
+  // The service's pinned API, in memory. `outcome` decides what a pin returns.
+  function wire(outcome: (request: GroupPinRequest, pinned: boolean) => Promise<GroupPinResult> | GroupPinResult = () => ({ ok: true, channels: 3 })): void {
+    store = new Set();
+    revision = 0;
+    waiting = [];
+    notice = vi.fn();
+    setPinned = vi.fn(async (request: GroupPinRequest, pinned: boolean) => {
+      const result = await outcome(request, pinned);
+      if (result.ok) {
+        if (pinned) store.add(slot(request.url, request.group));
+        else store.delete(slot(request.url, request.group));
+        revision++;
+      }
+      return result;
+    });
+    Object.assign(handlers, {
+      pins: {
+        isPinned: (url: string, group: string) => store.has(slot(url, group)),
+        setPinned,
+        revision: () => revision,
+        takeNotices: () => waiting.splice(0),
+      },
+      onNotice: notice,
+    });
+  }
+
+  beforeEach(() => wire());
+
+  const rows = (): HTMLElement[] => Array.from(container.querySelectorAll<HTMLElement>('.w3u-group'));
+  const chipOf = (row: number): HTMLElement | null => rows()[row]?.querySelector<HTMLElement>('.w3u-pin') ?? null;
+  const pinState = (row: number): 'unpinned' | 'pinned' | 'working' | null => {
+    const chip = chipOf(row);
+    if (!chip) return null;
+    if (chip.classList.contains('w3u-pin-busy')) return 'working';
+    return chip.querySelector('svg.pin-glyph')?.classList.contains('set') ? 'pinned' : 'unpinned';
+  };
+  // The icon and the screen-reader label; the glyph is the only visual.
+  const expectChip = (row: number, state: 'unpinned' | 'pinned'): void => {
+    const chip = chipOf(row) as HTMLElement;
+    const pinned = state === 'pinned';
+    expect(pinState(row)).toBe(state);
+    expect(chip.classList.contains('w3u-pin-on')).toBe(pinned);
+    expect(chip.getAttribute('role')).toBe('button');
+    expect(chip.getAttribute('aria-pressed')).toBe(pinned ? 'true' : 'false');
+    expect(chip.getAttribute('aria-label')).toBe(pinned ? 'In Live' : 'Show in Live');
+    expect(chip.textContent).toBe('');
+    expect(chip.querySelector('svg')?.getAttribute('fill')).toBe(pinned ? 'currentColor' : 'none');
+    expect(chip.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true');
+    expect(chip.querySelector('.w3u-glyph')?.textContent).toBe('');
+    expect(chip.hasAttribute('data-focusable')).toBe(true);
+    expect(chip.getAttribute('aria-busy')).toBe('false');
+  };
+
+  it('offers the action on linked-list rows only at the root, and the badge once added', () => {
+    store.add(slot(TWO, ''));
+    open(root(), links());
+    expect(chipOf(0)).toBeNull();
+    expectChip(1, 'unpinned');
+    expectChip(2, 'pinned');
+    expect(rows()[1].querySelector('.w3u-group-label')?.textContent).toBe('Hub One');
+  });
+
+  it('keeps the pin on the second line under the name, keyed for the D-pad', () => {
+    open(root(), links());
+    expect(chipOf(1)?.getAttribute('data-key')).toBe('p:1');
+    expect(chipOf(2)?.getAttribute('data-key')).toBe('p:2');
+    expect(chipOf(1)?.parentElement?.querySelector('.w3u-group-label')?.textContent).toBe('Hub One');
+  });
+
+  it('keeps the same fixed box in every state and never reveals words on focus', () => {
+    const css = readFileSync(resolve(__dirname, '../../css/w3u-view.css'), 'utf8');
+    const rule = (selector: string): string => {
+      const match = css.match(new RegExp(`${selector.replace(/[.]/g, '\\.')} \\{([^}]*)\\}`));
+      return match ? match[1] : '';
+    };
+    expect(rule('.w3u-pin')).toMatch(/width: 32px;/);
+    expect(rule('.w3u-pin')).toMatch(/height: 32px;/);
+    expect(css).not.toContain('w3u-pin-text');
+    // State rules may recolor the chip but never resize it.
+    for (const selector of ['.w3u-pin-on', '.w3u-pin.focused', '.w3u-pin-busy .w3u-glyph', '.w3u-pin-busy.focused .w3u-glyph']) {
+      expect(rule(selector)).not.toMatch(/\b(width|height|padding|margin|display|border-width):/);
+    }
+    expect(rule('.w3u-pin .w3u-glyph')).toMatch(/width: 24px;[^}]*height: 24px;/);
+  });
+
+  it('renders no text in the chip at rest, pinned, focused, or working', async () => {
+    let finish!: (result: GroupPinResult) => void;
+    wire(() => new Promise<GroupPinResult>((resolve) => { finish = resolve; }));
+    const view = open(root(), links());
+    expect(chipOf(1)?.textContent).toBe('');
+    goToRow(view, 1);
+    pressKey(view, 'right');
+    expect(chipOf(1)?.classList.contains('focused')).toBe(true);
+    expect(chipOf(1)?.textContent).toBe('');
+    expect(chipOf(1)?.querySelectorAll('svg')).toHaveLength(1);
+    pressKey(view, 'select');
+    expect(pinState(1)).toBe('working');
+    expect(chipOf(1)?.textContent).toBe('');
+    expect(chipOf(1)?.getAttribute('aria-busy')).toBe('true');
+    expect(chipOf(1)?.getAttribute('aria-label')).toBe('Show in Live');
+    finish({ ok: true, channels: 3 });
+    await settle();
+    expect(chipOf(1)?.textContent).toBe('');
+    expectChip(1, 'pinned');
+  });
+
+  it('shows nothing when the host gives no way to add, and Right still opens the row', async () => {
+    delete (handlers as { pins?: unknown }).pins;
+    fetchMock.mockResolvedValueOnce(parsedList([listed('Delta', 'Films')]));
+    const view = open(root(), links());
+    expect(container.querySelector('.w3u-pin')).toBeNull();
+    goToRow(view, 1);
+    pressKey(view, 'right');
+    await settle();
+    expect(tileNames()).toEqual(['Delta']);
+    expect(focusedKeys()).toEqual(['t:0']);
+  });
+
+  it('offers nothing on a closed link', () => {
+    open(root(), links(), [ONE]);
+    expect(tags()).toEqual(['Already open']);
+    expect(chipOf(1)).toBeNull();
+    expectChip(2, 'unpinned');
+  });
+
+  it('adds a whole list with an empty group and the depth of that list', async () => {
+    const view = open(root(), links());
+    goToRow(view, 1);
+    pressKey(view, 'right');
+    expect(focusedKeys()).toEqual(['p:1']);
+    pressKey(view, 'select');
+    await settle();
+    expect(setPinned).toHaveBeenCalledTimes(1);
+    expect(setPinned).toHaveBeenCalledWith({ url: ONE, group: '', name: 'Hub One', depth: 1 }, true);
+    expectChip(1, 'pinned');
+    expect(focusedKeys()).toEqual(['p:1']);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('takes a list out of Live with the same address and group', async () => {
+    store.add(slot(ONE, ''));
+    const view = open(root(), links());
+    goToRow(view, 1);
+    pressKey(view, 'right');
+    pressKey(view, 'select');
+    await settle();
+    expect(setPinned).toHaveBeenCalledWith({ url: ONE, group: '', name: 'Hub One', depth: 1 }, false);
+    expectChip(1, 'unpinned');
+    expect(focusedKeys()).toEqual(['p:1']);
+  });
+
+  it('keeps OK on the row opening it, and walks between row, action, and titles', async () => {
+    fetchMock.mockResolvedValueOnce(parsedList([listed('Delta', 'Films')]));
+    const view = open(root(), links());
+    goToRow(view, 1);
+    pressKey(view, 'right');
+    pressKey(view, 'left');
+    expect(focusedKeys()).toEqual(['g:1']);
+    pressKey(view, 'right');
+    pressKey(view, 'back');
+    expect(focusedKeys()).toEqual(['g:1']);
+    expect(handlers.onBack).not.toHaveBeenCalled();
+    pressKey(view, 'select');
+    await settle();
+    expect(setPinned).not.toHaveBeenCalled();
+    expect(tileNames()).toEqual(['Delta']);
+    expect(focusedKeys()).toEqual(['t:0']);
+  });
+
+  it('moves along the action column and out through the tab bar', () => {
+    const view = open([], links());
+    pressKey(view, 'right');
+    expect(focusedKeys()).toEqual(['p:0']);
+    pressKey(view, 'down');
+    expect(focusedKeys()).toEqual(['p:1']);
+    pressKey(view, 'up');
+    pressKey(view, 'up');
+    expect(handlers.onRevealTabBar).toHaveBeenCalledTimes(1);
+  });
+
+  it('opens a list from its action with Right, landing on its first title', async () => {
+    fetchMock.mockResolvedValueOnce(parsedList([listed('Delta', 'Films')]));
+    const view = open([], links());
+    pressKey(view, 'right');
+    pressKey(view, 'right');
+    await settle();
+    expect(tileNames()).toEqual(['Delta']);
+    expect(focusedKeys()).toEqual(['t:0']);
+  });
+
+  describe('inside an opened list', () => {
+    async function openOne(): Promise<W3uView> {
+      fetchMock.mockResolvedValueOnce(parsedList(films(), [nested('Sub Two', SUB)]));
+      const view = open(root(), links());
+      goToRow(view, 1);
+      pressKey(view, 'select');
+      await settle();
+      return view;
+    }
+
+    it('adds each station group by the list address and its own name, one level deep', async () => {
+      const view = await openOne();
+      expect(railLabels()).toEqual(['Films', 'Series', 'Sub Two']);
+      expectChip(0, 'unpinned');
+      pressKey(view, 'down');
+      pressKey(view, 'right');
+      pressKey(view, 'select');
+      await settle();
+      expect(setPinned).toHaveBeenCalledWith({ url: ONE, group: 'Series', name: 'Series', depth: 1 }, true);
+      expectChip(1, 'pinned');
+      expectChip(0, 'unpinned');
+    });
+
+    it('adds a link row one level below the list it sits in, and its groups at that level', async () => {
+      const view = await openOne();
+      pressKey(view, 'down');
+      pressKey(view, 'down');
+      pressKey(view, 'right');
+      pressKey(view, 'select');
+      await settle();
+      expect(setPinned).toHaveBeenLastCalledWith({ url: SUB, group: '', name: 'Sub Two', depth: 2 }, true);
+
+      fetchMock.mockResolvedValueOnce(parsedList([listed('Hotel', 'Anime'), listed('India', 'Music')]));
+      pressKey(view, 'left');
+      pressKey(view, 'select');
+      await settle();
+      expect(railLabels()).toEqual(['Anime', 'Music']);
+      pressKey(view, 'down');
+      pressKey(view, 'right');
+      pressKey(view, 'select');
+      await settle();
+      expect(setPinned).toHaveBeenLastCalledWith({ url: SUB, group: 'Music', name: 'Music', depth: 2 }, true);
+    });
+
+    it('uses the cleaned name the row shows', async () => {
+      fetchMock.mockResolvedValueOnce(parsedList([listed('Delta', 'MLB \u26BE'), listed('Echo', 'Series')]));
+      const view = open([], links());
+      pressKey(view, 'select');
+      await settle();
+      pressKey(view, 'right');
+      pressKey(view, 'select');
+      await settle();
+      expect(setPinned).toHaveBeenCalledWith({ url: ONE, group: 'MLB \u26BE', name: 'MLB', depth: 1 }, true);
+    });
+  });
+
+  describe('while it works', () => {
+    it('shows it on that row only, keeps the ring, and ignores a second OK', async () => {
+      let finish!: (result: GroupPinResult) => void;
+      wire(() => new Promise<GroupPinResult>((resolve) => { finish = resolve; }));
+      const view = open(root(), links());
+      goToRow(view, 1);
+      pressKey(view, 'right');
+      pressKey(view, 'select');
+      pressKey(view, 'select');
+      pressKey(view, 'select');
+      expect(setPinned).toHaveBeenCalledTimes(1);
+      expect(chipOf(1)?.classList.contains('w3u-pin-busy')).toBe(true);
+      expect(chipOf(1)?.getAttribute('aria-busy')).toBe('true');
+      expect(pinState(1)).toBe('working');
+      expect(chipOf(1)?.querySelector('svg')).toBeNull();
+      expect(chipOf(1)?.querySelector('.w3u-glyph')).not.toBeNull();
+      expect(pinState(2)).toBe('unpinned');
+      expect(focusedKeys()).toEqual(['p:1']);
+
+      finish({ ok: true, channels: 3 });
+      await settle();
+      expect(chipOf(1)?.classList.contains('w3u-pin-busy')).toBe(false);
+      expect(chipOf(1)?.getAttribute('aria-busy')).toBe('false');
+      expectChip(1, 'pinned');
+      expect(focusedKeys()).toEqual(['p:1']);
+
+      pressKey(view, 'select');
+      await settle();
+      expect(setPinned).toHaveBeenCalledTimes(2);
+    });
+
+    it('lets another row work meanwhile', async () => {
+      wire(() => new Promise<GroupPinResult>(() => undefined));
+      const view = open(root(), links());
+      goToRow(view, 1);
+      pressKey(view, 'right');
+      pressKey(view, 'select');
+      pressKey(view, 'down');
+      pressKey(view, 'select');
+      expect(setPinned).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('when it cannot', () => {
+    const reasons: PinnedLinkReason[] = [
+      'invalid', 'depth', 'budget', 'limit', 'fetch_failed', 'group_missing', 'canceled', 'storage',
+    ];
+
+    it.each(reasons)('says why in words for %s, and leaves the action in place', async (reason) => {
+      wire(() => ({ ok: false, reason }));
+      const view = open(root(), links());
+      goToRow(view, 1);
+      pressKey(view, 'right');
+      pressKey(view, 'select');
+      await settle();
+      expect(notice).toHaveBeenCalledTimes(1);
+      const message = notice.mock.calls[0][0] as string;
+      expect(message).toBe(pinFailureCopy(reason));
+      expect(message.length).toBeGreaterThan(10);
+      expect(message).not.toBe(reason);
+      expect(message).not.toContain('_');
+      expectChip(1, 'unpinned');
+      expect(chipOf(1)?.classList.contains('w3u-pin-busy')).toBe(false);
+      expect(focusedKeys()).toEqual(['p:1']);
+    });
+
+    it('gives every reason its own wording', () => {
+      expect(new Set(reasons.map((reason) => pinFailureCopy(reason))).size).toBe(reasons.length);
+    });
+
+    it('treats a service that throws as a save failure and lets the viewer try again', async () => {
+      setPinned.mockRejectedValueOnce(new Error('boom'));
+      const view = open(root(), links());
+      goToRow(view, 1);
+      pressKey(view, 'right');
+      pressKey(view, 'select');
+      await settle();
+      expect(notice).toHaveBeenCalledWith(pinFailureCopy('storage'));
+      pressKey(view, 'select');
+      await settle();
+      expectChip(1, 'pinned');
+    });
+  });
+
+  describe('notices', () => {
+    const gone: PinnedLinkNotice = { url: ONE, group: 'Series', name: 'Series', reason: 'group_missing' };
+    const down: PinnedLinkNotice = { url: TWO, group: '', name: 'Hub Two', reason: 'fetch_failed' };
+
+    afterEach(() => vi.useRealTimers());
+
+    it('shows a vanished group once, by name, when the Library opens', () => {
+      waiting.push(gone);
+      const view = open(root(), links());
+      expect(notice).toHaveBeenCalledTimes(1);
+      expect(notice).toHaveBeenCalledWith('Series is no longer in its playlist and was removed from Live.');
+      view.open(root(), links());
+      pressKey(view, 'down');
+      expect(notice).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows several one after another, each once', () => {
+      vi.useFakeTimers();
+      waiting.push(gone, down);
+      open(root(), links());
+      expect(notice).toHaveBeenCalledTimes(1);
+      vi.advanceTimersByTime(10000);
+      expect(notice).toHaveBeenCalledTimes(2);
+      expect(notice).toHaveBeenLastCalledWith("Couldn't load Hub Two for Live.");
+      vi.advanceTimersByTime(10000);
+      expect(notice).toHaveBeenCalledTimes(2);
+    });
+
+    it('falls back to the plain wording for a reason without its own notice', () => {
+      waiting.push({ url: ONE, group: '', name: 'Hub One', reason: 'storage' });
+      open(root(), links());
+      expect(notice).toHaveBeenCalledWith(pinFailureCopy('storage'));
+    });
+  });
+
+  describe('when the pins change elsewhere', () => {
+    it('refreshes the badges on the next key', () => {
+      const view = open(root(), links());
+      expectChip(1, 'unpinned');
+      store.add(slot(ONE, ''));
+      pressKey(view, 'left');
+      expectChip(1, 'unpinned');
+      revision++;
+      pressKey(view, 'down');
+      expectChip(1, 'pinned');
+      store.delete(slot(ONE, ''));
+      revision++;
+      view.refreshPins();
+      expectChip(1, 'unpinned');
+    });
+
+    it('reads the service again when the Library is reopened', () => {
+      const view = open(root(), links());
+      store.add(slot(TWO, ''));
+      revision++;
+      view.open(root(), links());
+      expectChip(2, 'pinned');
+    });
+
+    it('asks the service once per pin until something changes', () => {
+      const pins = handlers.pins as unknown as { isPinned: (url: string, group: string) => boolean };
+      const asked = vi.spyOn(pins, 'isPinned');
+      const view = open(root(), links());
+      const first = asked.mock.calls.length;
+      expect(first).toBe(2);
+      pressKey(view, 'left');
+      pressKey(view, 'down');
+      pressKey(view, 'down');
+      expect(asked.mock.calls.length).toBe(first);
+      revision++;
+      pressKey(view, 'up');
+      expect(asked.mock.calls.length).toBe(first * 2);
     });
   });
 });

@@ -22,6 +22,7 @@ vi.mock('../services/playlist-service', () => ({
 
 import { PlayerMenu } from './player-menu';
 import { Focus } from '../navigation/focus-scope';
+import { StorageService } from '../services/storage-service';
 import type { PlaybackRateState } from '../services/playback-rate';
 
 // Number of colour actions before the "Audio Track" row in the main menu.
@@ -95,6 +96,13 @@ describe('PlayerMenu', () => {
     expect(items().map(i => i.dataset.menuAction)).toEqual(['red', 'green', 'yellow', 'blue']);
     expect(el.textContent).toContain('Alpha');
     expect(items()[0].classList.contains('focused')).toBe(true);
+  });
+
+  it('drops the Guide row while the Guide tab is off', () => {
+    vi.spyOn(StorageService, 'getShowGuideTab').mockReturnValue(false);
+    menu.show();
+    expect(items().map(i => i.dataset.menuAction)).toEqual(['green', 'yellow', 'blue']);
+    vi.restoreAllMocks();
   });
 
   it('show() always resets focus to the first item', () => {

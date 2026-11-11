@@ -169,6 +169,9 @@ export const CONFIG = {
     RESOLVABLE_EMBED_HOSTS: ['ok.ru'],
     SYNOPSIS_MAX_CHARS: 1200,
     GENRES_MAX: 4,
+    // Total titles the pinned linked-list overlay may add to Live. Each linked
+    // list is still capped at W3U_LINK_LIMITS.MAX_STATIONS.
+    LIVE_LINK_TITLES: 3000,
   },
 
   // Catch-up (time-shift) resume and history store tuning.

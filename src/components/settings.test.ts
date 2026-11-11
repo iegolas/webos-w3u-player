@@ -47,6 +47,7 @@ const {
     epgRefreshHours: 6,
     xtreamCatalogRefreshHours: 6,
     showHidden: false,
+    showGuideTab: true,
     tzOffset: null as number | null,
     epgOffsets: {} as Record<string, number>,
     locale: 'system' as const,
@@ -112,6 +113,8 @@ const {
       setLiveCategorySnapshot: vi.fn(),
       getShowHiddenChannels: vi.fn(() => state.showHidden),
       setShowHiddenChannels: vi.fn((v: boolean) => { state.showHidden = v; }),
+      getShowGuideTab: vi.fn(() => state.showGuideTab),
+      setShowGuideTab: vi.fn((v: boolean) => { state.showGuideTab = v; }),
       getChannelCustomization: vi.fn(() => null),
       setChannelCustomization: vi.fn(),
       clearChannelCustomization: vi.fn(),
@@ -1505,6 +1508,28 @@ describe('Settings Recently Watched clearing', () => {
 
     expect(state.showHidden).toBe(false);
     expect(onChannelsChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows the Guide tab toggle on by default, under Appearance', () => {
+    settings.render();
+    const group = container.querySelector('#show-guide-tab');
+    expect(group?.querySelector('.toggle-option.active')?.getAttribute('data-value')).toBe('on');
+    expect(group?.closest('[data-settings-category]')?.getAttribute('data-settings-category'))
+      .toBe('appearance');
+  });
+
+  it('persists the Guide tab toggle on Save', () => {
+    settings.render();
+    click('#show-guide-tab [data-value="off"]');
+    expect(state.showGuideTab).toBe(true);
+    click('#save-settings');
+
+    expect(state.showGuideTab).toBe(false);
+    expect(onSave).toHaveBeenCalledWith('apply');
+
+    settings.render();
+    expect(container.querySelector('#show-guide-tab .toggle-option.active')?.getAttribute('data-value'))
+      .toBe('off');
   });
 
   it('cancels without clearing', () => {

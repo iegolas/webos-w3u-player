@@ -177,6 +177,11 @@ interface ShakaNamespace extends ShakaNamespaceLike {
       };
       Code?: {
         BAD_HTTP_STATUS?: number;
+        UNABLE_TO_GUESS_MANIFEST_TYPE?: number;
+        DASH_INVALID_XML?: number;
+        DASH_NO_SEGMENT_INFO?: number;
+        DASH_EMPTY_ADAPTATION_SET?: number;
+        DASH_EMPTY_PERIOD?: number;
         LICENSE_REQUEST_FAILED?: number;
         LICENSE_RESPONSE_REJECTED?: number;
       };
@@ -198,6 +203,24 @@ function isPermanentShakaLicenseError(error: unknown, shaka: ShakaNamespace): bo
   if (!networkError || networkError.code !== badHttpStatus) return false;
   const status = networkError.data?.[1];
   return status === 401 || status === 403;
+}
+
+function isUnplayableShakaManifest(error: unknown, shaka: ShakaNamespace): boolean {
+  const detail = error as ShakaError | null;
+  const codes = shaka.util.Error.Code;
+  if (!detail || !codes || typeof detail.code !== 'number') return false;
+  return [
+    codes.UNABLE_TO_GUESS_MANIFEST_TYPE,
+    codes.DASH_INVALID_XML,
+    codes.DASH_NO_SEGMENT_INFO,
+    codes.DASH_EMPTY_ADAPTATION_SET,
+    codes.DASH_EMPTY_PERIOD,
+  ].some(code => typeof code === 'number' && detail.code === code);
+}
+
+// An HLS playlist with no segment and no variant can never play.
+function isUnusableHls(text: string): boolean {
+  return text.indexOf('#EXTINF') < 0 && text.indexOf('#EXT-X-STREAM-INF') < 0;
 }
 
 export interface PipelineManifest {
@@ -225,6 +248,8 @@ export interface PlayerPipelineOptions {
   /** The HTTP headers setting, read per load. */
   headerPlayback: () => HeaderPlayback;
   onError: (reason?: 'unsupported') => void;
+  /** The manifest is empty or has no playable variant; this load cannot recover. */
+  onStreamOffline: () => void;
   onAudioTracksUpdated: () => void;
   onSubtitleTracksUpdated: () => void;
   onManifest: (manifest: PipelineManifest) => void;
@@ -276,6 +301,7 @@ export class PlayerPipeline {
   private msePending = false;
   private loadToken = 0;
   private hlsRecoveries = 0;
+  private offlineToken = -1;
   private manifestSeq = 0;
   private manifestController: AbortController | null = null;
   private videoLoadLabels = new WeakMap<HTMLVideoElement, string>();
@@ -325,6 +351,15 @@ export class PlayerPipeline {
   private chainWinners = new Map<string, ChainStep>();
 
   constructor(private callbacks: PlayerPipelineOptions) {}
+
+  private reportStreamOffline(token: number, reason: string): void {
+    if (token !== this.loadToken || this.offlineToken === token) return;
+    this.offlineToken = token;
+    this.hls?.stopLoad();
+    log.warn('Stream manifest has no playable variant', 'event=playback.stream.offline',
+      this.callbacks.playbackLabel(token), `reason=${reason}`);
+    this.callbacks.onStreamOffline();
+  }
 
   setVideoElement(videoEl: HTMLVideoElement): void {
     if (this.videoEl !== videoEl) this.engineTeardown = null;
@@ -501,6 +536,7 @@ export class PlayerPipeline {
         log.info('Selected webOS native playback', 'event=playback.path.native',
           this.callbacks.playbackLabel(token),
           'reason=direct', '| webOS native VOD | MIME', mime || '(sniffed)');
+        if (isHlsUrl) this.probeHlsManifest(url, token);
         this.playNative(url, mime);
         return;
       }
@@ -619,6 +655,7 @@ export class PlayerPipeline {
       log.info('Selected direct playback', 'event=playback.path.direct',
         this.callbacks.playbackLabel(token),
         'reason=direct', '| desktop direct VOD');
+      if (isHlsUrl) this.probeHlsManifest(url, token);
       videoEl.src = url;
       videoEl.play().catch(e => log.warn('Direct play() rejected',
         'event=playback.play.rejected',
@@ -697,6 +734,7 @@ export class PlayerPipeline {
    * headers setting allows. False when none is left, or time ran out.
    */
   escalate(): boolean {
+    if (this.offlineToken === this.loadToken) return false;
     const chain = this.chainFor(this.loadToken);
     if (!chain || chain.won || !this.videoEl) return false;
     // A Luna step that already handed the stream to the element.
@@ -825,6 +863,7 @@ export class PlayerPipeline {
     cause: string,
     announce?: (next: ChainStep | 'none') => void,
   ): boolean {
+    if (this.offlineToken === chain.token) return false;
     const from = chain.step;
     const label = this.callbacks.playbackLabel(chain.token);
     for (let next = this.nextStep(chain); next; next = this.nextStep(chain)) {
@@ -1357,6 +1396,7 @@ export class PlayerPipeline {
       `drm=${dash?.clientId ? 'playready' : drmUnknown ? 'unknown' : 'none'}`,
       ...(drmUnknown ? ['mpd=unreadable'] : []));
     const fallBack = (fallback: LunaFallbackReason, code: number, stage: string): void => {
+      if (this.offlineToken === token) return;
       const note = (to: string): void => {
         log.warn(`Luna playback fell back to ${to}`,
           'event=playback.luna.fallback', label,
@@ -1734,7 +1774,12 @@ export class PlayerPipeline {
       // the saved picks there.
       hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, this.callbacks.onAudioTracksUpdated);
       hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, this.callbacks.onSubtitleTracksUpdated);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      hls.on(Hls.Events.MANIFEST_PARSED, (_event, data) => {
+        if (loadToken !== this.loadToken || this.offlineToken === loadToken) return;
+        if (!data?.levels?.length) {
+          this.reportStreamOffline(loadToken, 'hls_no_levels');
+          return;
+        }
         log.info('hls.js manifest parsed; starting playback',
           'event=playback.manifest.parsed', this.callbacks.playbackLabel(loadToken),
           'path=hls');
@@ -1746,10 +1791,16 @@ export class PlayerPipeline {
       // re-fetches) a few times, but give up on a genuinely dead stream so it
       // zaps to the next channel instead of retrying forever.
       hls.on(Hls.Events.ERROR, (_event, data) => {
-        if (loadToken !== this.loadToken) return;
+        if (loadToken !== this.loadToken || this.offlineToken === loadToken) return;
         log.warn('hls.js error', 'event=playback.hls.error',
           this.callbacks.playbackLabel(loadToken),
           { type: data.type, details: data.details, fatal: data.fatal });
+        const details = String(data.details);
+        if (details === 'levelEmptyError' || details === 'levelParsingError'
+            || details === 'manifestParsingError') {
+          this.reportStreamOffline(loadToken, `hls_${details}`);
+          return;
+        }
         if (!data.fatal) return;
         if (this.hlsRecoveries >= CONFIG.PLAYER.HLS_MAX_RECOVERIES) {
           this.callbacks.onError();
@@ -1869,6 +1920,10 @@ export class PlayerPipeline {
         reportedCriticalError = true;
         log.warn('Shaka critical error', 'event=playback.dash.error',
           this.callbacks.playbackLabel(loadToken), shakaErrorDetail(error));
+        if (isUnplayableShakaManifest(error, shaka)) {
+          this.reportStreamOffline(loadToken, 'shaka_manifest');
+          return;
+        }
         if (isPermanentShakaLicenseError(error, shaka)) {
           this.callbacks.onError('unsupported');
         } else {
@@ -1959,6 +2014,26 @@ export class PlayerPipeline {
     }
   }
 
+  // A direct HLS VOD loads on the element and never reads its manifest, so an
+  // empty playlist has no other sign.
+  private probeHlsManifest(url: string, loadToken: number): void {
+    const controller = new AbortController();
+    this.manifestController?.abort();
+    this.manifestController = controller;
+    void fetchLimitedText(url, CONFIG.PLAYER.MANIFEST_MAX_BYTES,
+      CONFIG.PLAYER.MANIFEST_TIMEOUT, controller.signal, '#EXTM3U').then(text => {
+      if (loadToken !== this.loadToken || controller.signal.aborted) return;
+      if (isUnusableHls(text)) this.reportStreamOffline(loadToken, 'playlist_empty');
+    }, error => {
+      if (loadToken !== this.loadToken || controller.signal.aborted) return;
+      if (error instanceof FetchTextError && error.code === 'invalid_content' && error.emptyBody) {
+        this.reportStreamOffline(loadToken, 'playlist_empty');
+      }
+    }).then(() => {
+      if (this.manifestController === controller) this.manifestController = null;
+    });
+  }
+
   // Fetch the HLS master once and parse its audio + subtitle rendition names so
   // the pickers, toasts and per-channel memory show real labels instead of
   // "Audio 2" / "Subtitle 2". Native audio/text tracks carry no usable
@@ -2008,6 +2083,10 @@ export class PlayerPipeline {
         viaService = true;
       }
       if (seq !== this.manifestSeq) return null;
+      if (!dash && isUnusableHls(text)) {
+        this.reportStreamOffline(loadToken, 'playlist_empty');
+        return null;
+      }
       if (dash && !isMpdText(text)) {
         throw new FetchTextError('invalid_content', 'Response is not an MPD');
       }
@@ -2025,6 +2104,10 @@ export class PlayerPipeline {
       return parsed;
     } catch (e) {
       if (controller.signal.aborted) return null;
+      if (!dash && e instanceof FetchTextError && e.code === 'invalid_content' && e.emptyBody) {
+        this.reportStreamOffline(loadToken, 'playlist_empty');
+        return null;
+      }
       if (chain && step && e instanceof FetchTextError && e.code === 'http') {
         chain.manifestFailed[step] = e.status;
       }

@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { Channel } from '../types';
 import type { RecentlyWatchedItem } from '../services/recently-watched';
@@ -32,6 +34,10 @@ const {
     playlistMock: {
       channels,
       groupsRevision: 0,
+      pinnedRevision: 0,
+      pins: [] as { group: string; url: string; groupKey: string; name: string }[],
+      pinnedLiveGroups: () => playlistMock.pins.slice(),
+      unpinLiveGroup: vi.fn(async (_group: string) => true),
       playlistTabs: [] as { id: string; name: string }[],
       getGroupsForPlaylist: () => ['News', 'Sports'],
       getGroupKeyForDisplay: (display: string) => display,
@@ -327,10 +333,130 @@ describe('ChannelList.render', () => {
   it('renders normal channel and group content without editor inputs', () => {
     list.render();
 
-    expect(channelItems()[0].querySelector('.channel-name')?.textContent).toBe('Alpha');
+    expect(channelItems()[0].querySelector('.channel-name')?.textContent).toBe('News - Alpha');
     expect(container.querySelector('[data-group="source:News"] .group-name')?.textContent)
       .toBe('News');
     expect(container.querySelector('.edit-text-input')).toBeNull();
+  });
+
+  describe('group prefix in the All category', () => {
+    const names = () => channelItems()
+      .map(item => item.querySelector('.channel-name')?.textContent);
+    const mkChannel = (o: Partial<Channel>): Channel => ({
+      id: '', name: '', logo: '', group: '', url: '', extras: null,
+      playlistIds: [], catchup: '', catchupSource: '', catchupDays: 0, ...o,
+    });
+    const withExtra = (extra: Channel[], run: () => void): void => {
+      data.raw.push(...extra);
+      playlistMock.applyCustomization();
+      try {
+        run();
+      } finally {
+        data.raw.splice(data.raw.length - extra.length, extra.length);
+        playlistMock.applyCustomization();
+      }
+    };
+
+    it('prefixes channels of a multi-channel group and keeps a lone channel bare', () => {
+      list.render();
+      expect(names()).toEqual(['News - Alpha', 'Bravo', 'News - Charlie']);
+    });
+
+    it('tells repeated names apart across groups', () => {
+      const extra = [
+        mkChannel({ id: 'd', name: 'Event 1', group: 'Group One', url: 'http://host/d' }),
+        mkChannel({ id: 'e', name: 'Event 2', group: 'Group One', url: 'http://host/e' }),
+        mkChannel({ id: 'f', name: 'Event 1', group: 'Group Two', url: 'http://host/f' }),
+        mkChannel({ id: 'g', name: 'Event 1', group: 'Group Two', url: 'http://host/g' }),
+      ];
+      withExtra(extra, () => {
+        list.render();
+        expect(names().slice(3)).toEqual([
+          'Group One - Event 1',
+          'Group One - Event 2',
+          'Group Two - Event 1',
+          'Group Two - Event 1',
+        ]);
+      });
+    });
+
+    it('sets the composed aria-label only on prefixed rows', () => {
+      list.render();
+      const items = channelItems();
+      expect(items[0].getAttribute('aria-label')).toBe('News - Alpha');
+      expect(items[1].hasAttribute('aria-label')).toBe(false);
+    });
+
+    it('keeps data-key and row order independent of the label', () => {
+      list.render();
+      expect(channelItems().map(item => item.dataset.key)).toEqual(['ch:0', 'ch:1', 'ch:2']);
+      expect(channelItems().map(item => item.dataset.listPosition)).toEqual(['0', '1', '2']);
+    });
+
+    it('does not rename the channel itself', () => {
+      list.render();
+      expect(data.channels.map(ch => ch.name)).toEqual(['Alpha', 'Bravo', 'Charlie']);
+    });
+
+    it('shows the bare name in a group view', () => {
+      list.render();
+      hover(container.querySelector<HTMLElement>('[data-group="source:News"]')!);
+      list.handleAction('select');
+      expect(names()).toEqual(['Alpha', 'Charlie']);
+      expect(channelItems()[0].hasAttribute('aria-label')).toBe(false);
+    });
+
+    it('shows the bare name in Favorites', () => {
+      data.favorites = [channelKey(data.channels[0])];
+      list.render();
+      hover(container.querySelector<HTMLElement>('[data-group="builtin:favorites"]')!);
+      list.handleAction('select');
+      expect(names()).toEqual(['Alpha']);
+    });
+
+    it('counts group size inside the selected playlist tab', () => {
+      data.raw[0].playlistIds = ['p1'];
+      data.raw[1].playlistIds = ['p1'];
+      data.raw[2].playlistIds = ['p2'];
+      playlistMock.playlistTabs = [{ id: 'p1', name: 'One' }, { id: 'p2', name: 'Two' }];
+      list.render();
+      hover(container.querySelector<HTMLElement>('[data-playlist="p1"]')!);
+      list.handleAction('select');
+      expect(names()).toEqual(['Alpha', 'Bravo']);
+    });
+
+    it('leaves the uncategorized bucket unprefixed', () => {
+      const extra = [
+        mkChannel({ id: 'd', name: 'Delta', group: UNCATEGORIZED_GROUP, url: 'http://host/d' }),
+        mkChannel({ id: 'e', name: 'Echo', group: UNCATEGORIZED_GROUP, url: 'http://host/e' }),
+      ];
+      withExtra(extra, () => {
+        list.render();
+        expect(names().slice(3)).toEqual(['Delta', 'Echo']);
+      });
+    });
+
+    it('keeps a long label in one ellipsized line beside the number', () => {
+      const group = 'Long Group Name '.repeat(8).trim();
+      const name = 'Long Channel Name '.repeat(8).trim();
+      const extra = [
+        mkChannel({ id: 'd', name, group, url: 'http://host/d' }),
+        mkChannel({ id: 'e', name: 'Short', group, url: 'http://host/e' }),
+      ];
+      withExtra(extra, () => {
+        list.render();
+        const row = channelItems()[3];
+        const label = row.querySelector('.channel-name')!;
+        expect(label.textContent).toBe(`${group} - ${name}`);
+        expect(label.children.length).toBe(0);
+        expect(row.querySelector('.channel-number')?.textContent).toBe('4');
+      });
+      const css = readFileSync(join(process.cwd(), 'css/channel-list.css'), 'utf8');
+      const rule = /\n\.channel-name \{([^}]*)\}/.exec(css)?.[1] ?? '';
+      expect(rule).toContain('white-space: nowrap');
+      expect(rule).toContain('text-overflow: ellipsis');
+      expect(rule).toContain('overflow: hidden');
+    });
   });
 
   it('opens channel editing from the pencil button', () => {
@@ -1277,5 +1403,175 @@ describe('ChannelList focus scope off the keys', () => {
     } finally {
       bar.dispose();
     }
+  });
+});
+
+describe('pinned Live groups', () => {
+  const pin = (group: string, groupKey = group, name = 'Library list') =>
+    ({ group, url: 'http://host/list.w3u', groupKey, name });
+
+  afterEach(() => {
+    playlistMock.pins = [];
+    playlistMock.pinnedRevision = 0;
+    playlistMock.unpinLiveGroup.mockClear();
+  });
+
+  function chips(): HTMLElement[] {
+    return Array.from(container.querySelectorAll<HTMLElement>('[data-pin-group]'));
+  }
+
+  it('marks only the pinned groups with an icon-only chip labeled Remove from Live', () => {
+    playlistMock.pins = [pin('Sports')];
+    list.render();
+    expect(chips().map(chip => chip.dataset.pinGroup)).toEqual(['source:Sports']);
+    const chip = chips()[0];
+    expect(chip.closest('.group-item')?.getAttribute('data-group')).toBe('source:Sports');
+    expect(chip.getAttribute('role')).toBe('button');
+    expect(chip.getAttribute('aria-label')).toBe('Remove from Live');
+    expect(chip.getAttribute('aria-busy')).toBe('false');
+    expect(chip.textContent).toBe('');
+    expect(chip.querySelector('.group-pin-text')).toBeNull();
+    expect(chip.dataset.key).toBe('gp:source:Sports');
+    expect(chip.querySelector('svg.pin-glyph.set')).not.toBeNull();
+    expect(container.querySelector('[data-group="source:News"] [data-pin-group]')).toBeNull();
+    expect(container.querySelector('[data-group="builtin:all"] [data-pin-group]')).toBeNull();
+  });
+
+  it('keeps the chip a fixed box with no words when focused or working', () => {
+    const css = readFileSync(resolve(__dirname, '../../css/channel-list.css'), 'utf8');
+    const rule = (selector: string): string => {
+      const match = css.match(new RegExp(`${selector.replace(/[.]/g, '\\.')} \\{([^}]*)\\}`));
+      return match ? match[1] : '';
+    };
+    expect(css).not.toContain('group-pin-text');
+    expect(rule('.group-pin')).toMatch(/width: 32px;/);
+    expect(rule('.group-pin')).toMatch(/height: 32px;/);
+    for (const selector of ['.group-pin.focused', '.group-pin-busy .group-pin-glyph', '.group-pin-busy.focused .group-pin-glyph']) {
+      expect(rule(selector)).not.toMatch(/\b(width|height|padding|margin|display|border-width):/);
+    }
+  });
+
+  it('shows no marker when nothing is pinned', () => {
+    list.render();
+    expect(chips()).toHaveLength(0);
+  });
+
+  it('reaches the chip with Right, then Left returns to the row and Right enters the channels', () => {
+    playlistMock.pins = [pin('Sports')];
+    list.render();
+    const row = container.querySelector<HTMLElement>('[data-group="source:Sports"]')!;
+    hover(row);
+    expect(list.handleAction('right')).toBe(true);
+    expect(ringed(chips()[0])).toBe(true);
+    expect(ringsIn(container)).toHaveLength(1);
+    expect(list.handleAction('left')).toBe(true);
+    expect(ringed(row)).toBe(true);
+    expect(ringsIn(container)).toHaveLength(1);
+    expect(list.handleAction('right')).toBe(true);
+    expect(ringed(chips()[0])).toBe(true);
+    expect(list.handleAction('right')).toBe(true);
+    expect(ringed(channelItems()[0])).toBe(true);
+    expect(ringsIn(container)).toHaveLength(1);
+  });
+
+  it('skips groups that have no chip when moving down from a chip', () => {
+    playlistMock.pins = [pin('News')];
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="source:News"]')!);
+    list.handleAction('right');
+    expect(ringed(chips()[0])).toBe(true);
+    expect(list.handleAction('down')).toBe(true);
+    expect(ringed(container.querySelector('[data-group="source:Sports"]'))).toBe(true);
+    expect(ringsIn(container)).toHaveLength(1);
+  });
+
+  it('Back from the chip returns to its row without leaving the list', () => {
+    playlistMock.pins = [pin('Sports')];
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="source:Sports"]')!);
+    list.handleAction('right');
+    expect(list.handleBack()).toBe(true);
+    expect(ringed(container.querySelector('[data-group="source:Sports"]'))).toBe(true);
+    expect(list.handleBack()).toBe(false);
+  });
+
+  it('unpins with the rendered group name and drops the group from the list', async () => {
+    playlistMock.pins = [pin('Sports')];
+    playlistMock.unpinLiveGroup.mockImplementationOnce(async (group: string) => {
+      playlistMock.pins = playlistMock.pins.filter(entry => entry.group !== group);
+      playlistMock.pinnedRevision++;
+      playlistMock.groupsRevision++;
+      return true;
+    });
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="source:Sports"]')!);
+    list.handleAction('right');
+    list.handleAction('select');
+    expect(chips()[0].getAttribute('aria-busy')).toBe('true');
+    expect(chips()[0].getAttribute('aria-label')).toBe('Remove from Live');
+    expect(chips()[0].textContent).toBe('');
+    await vi.waitFor(() => expect(playlistMock.unpinLiveGroup).toHaveBeenCalledWith('Sports'));
+    await vi.waitFor(() => expect(chips()).toHaveLength(0));
+    expect(toastMock.showToast).not.toHaveBeenCalled();
+    expect(ringsIn(container)).toHaveLength(1);
+  });
+
+  it('names the list in a toast when a whole-list pin goes', async () => {
+    playlistMock.pins = [pin('News', '', 'World TV'), pin('Sports', '', 'World TV')];
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="source:News"]')!);
+    list.handleAction('right');
+    list.handleAction('select');
+    await vi.waitFor(() => expect(toastMock.showToast).toHaveBeenCalledTimes(1));
+    expect(toastMock.showToast.mock.calls[0][0]).toContain('World TV');
+    expect(playlistMock.unpinLiveGroup).toHaveBeenCalledWith('News');
+  });
+
+  it('does not toast about a list when only one group was pinned', async () => {
+    playlistMock.pins = [pin('News', 'News', 'World TV')];
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="source:News"]')!);
+    list.handleAction('right');
+    list.handleAction('select');
+    await vi.waitFor(() => expect(playlistMock.unpinLiveGroup).toHaveBeenCalled());
+    await Promise.resolve();
+    expect(toastMock.showToast).not.toHaveBeenCalled();
+  });
+
+  it('ignores a second OK while the removal is running', async () => {
+    playlistMock.pins = [pin('News')];
+    let finish: (ok: boolean) => void = () => {};
+    playlistMock.unpinLiveGroup.mockImplementationOnce(() => new Promise<boolean>(resolve => {
+      finish = resolve;
+    }));
+    list.render();
+    hover(container.querySelector<HTMLElement>('[data-group="source:News"]')!);
+    list.handleAction('right');
+    list.handleAction('select');
+    list.handleAction('select');
+    expect(playlistMock.unpinLiveGroup).toHaveBeenCalledTimes(1);
+    finish(false);
+    await vi.waitFor(() => expect(chips()[0]?.getAttribute('aria-busy')).toBe('false'));
+  });
+
+  it('shows a pin made elsewhere once the revision changes, without a re-render call', () => {
+    list.render();
+    expect(chips()).toHaveLength(0);
+    playlistMock.pins = [pin('News')];
+    playlistMock.pinnedRevision++;
+    list.handleAction('down');
+    expect(chips().map(chip => chip.dataset.pinGroup)).toEqual(['source:News']);
+    playlistMock.pins = [];
+    playlistMock.pinnedRevision++;
+    list.render();
+    expect(chips()).toHaveLength(0);
+  });
+
+  it('hides the markers while the list is being edited', () => {
+    playlistMock.pins = [pin('News')];
+    list.render();
+    expect(chips()).toHaveLength(1);
+    list.enterEditMode();
+    expect(chips()).toHaveLength(0);
   });
 });

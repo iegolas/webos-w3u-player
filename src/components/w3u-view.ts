@@ -10,13 +10,18 @@ import { VirtualList } from '../utils/virtual-list';
 import { VirtualScrollGuard } from '../utils/virtual-scroll';
 import { CONFIG } from '../config';
 import { t, tp } from '../i18n';
-import { CHEVRON_RIGHT_ICON, GLOBE_ICON, PLAY_ICON } from './icons';
+import { CHEVRON_RIGHT_ICON, GLOBE_ICON, PLAY_ICON, pinIcon } from './icons';
+import type { GroupPinRequest, GroupPinResult, PinnedLinkNotice } from '../services/playlist-service';
 import {
   buildW3uLibrary,
   canonicalUrl,
   classifyLinkFailure,
   cutOf,
   linkRows,
+  pinFailureCopy,
+  pinKeyOf,
+  pinNoticeCopy,
+  pinRequestFor,
   stationCount,
   W3uLinkLoader,
   W3U_LINK_LIMITS,
@@ -37,9 +42,12 @@ const GRID_VIEWPORT_HEIGHT = 840;
 const GROUP_ROW_STRIDE = 84;
 const GROUP_OVERSCAN = 6;
 const GROUP_VIEWPORT_HEIGHT = 840;
+// Pins that need a word each are shown one after another; this many at most.
+const NOTICE_MAX = 3;
+const NOTICE_GAP_MS = 3400;
 
 type Mode = 'library' | 'detail';
-type Region = 'group' | 'tile' | 'detail';
+type Region = 'group' | 'pin' | 'tile' | 'detail';
 
 interface ParsedKey {
   region: Region;
@@ -51,9 +59,20 @@ const DETAIL_KEY = 'd:action';
 function parseKey(key: string | null): ParsedKey | null {
   if (key === null) return null;
   if (key === DETAIL_KEY) return { region: 'detail', index: 0 };
-  const match = /^([gt]):(\d+)$/.exec(key);
+  const match = /^([gpt]):(\d+)$/.exec(key);
   if (!match) return null;
-  return { region: match[1] === 'g' ? 'group' : 'tile', index: Number(match[2]) };
+  return { region: match[1] === 'g' ? 'group' : match[1] === 'p' ? 'pin' : 'tile', index: Number(match[2]) };
+}
+
+// What the Library needs to add a group to Live. The host wires it to the
+// playlist service; a view without it shows no "Show in Live" control.
+export interface W3uPins {
+  isPinned: (url: string, group: string) => boolean;
+  setPinned: (request: GroupPinRequest, pinned: boolean) => Promise<GroupPinResult>;
+  // Changes whenever a pin is added, removed, or reloaded.
+  revision: () => number;
+  // Pins that vanished or failed to load since the last call, each once.
+  takeNotices: () => PinnedLinkNotice[];
 }
 
 export interface W3uHandlers {
@@ -68,6 +87,9 @@ export interface W3uHandlers {
   onCancelPlay: () => void;
   // A station that only plays on its own web page: the host opens the TV browser.
   onOpenInBrowser: (station: W3uStation) => void;
+  pins?: W3uPins;
+  // A short message the host shows as a toast.
+  onNotice?: (message: string) => void;
 }
 
 interface Level {
@@ -114,6 +136,13 @@ export class W3uView {
   // The station whose Play is still starting, and the attempt it belongs to.
   private starting: W3uStation | null = null;
   private startAttempt = 0;
+  // Rows adding or removing themselves to Live right now, by pin key.
+  private readonly pinBusy = new Set<string>();
+  // What the service said per pin key at `pinRevision`; a new revision clears it.
+  private readonly pinState = new Map<string, boolean>();
+  private pinRevision = -1;
+  private noticeQueue: string[] = [];
+  private noticeTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly layers: Record<Mode, HTMLElement>;
   private readonly gridVirtualizer = new VirtualGrid({
     columnStride: GRID_COLUMN_STRIDE,
@@ -190,16 +219,27 @@ export class W3uView {
       morph(this.layers.detail, html``);
       this.focusScope.track(null);
     }
+    this.syncPins();
     this.showLayer(this.mode);
     if (this.mode === 'library') this.renderLibrary();
     else this.renderDetail();
     const key = this.focusScope.focusKey;
     this.request(key !== null && this.hasKey(key) ? key : this.defaultKey(), this.placementVia());
+    this.surfaceNotices();
+  }
+
+  // The badges follow the service: called when the viewer comes back to the
+  // Library or presses a key, it redraws only when the pins changed meanwhile.
+  refreshPins(): void {
+    if (!this.syncPins()) return;
+    if (this.mode === 'library') this.renderLibrary();
+    this.surfaceNotices();
   }
 
   // Back into the section from the tab bar, or from the player: the focus
   // the viewer left, in view.
   resumeFocus(): void {
+    this.refreshPins();
     this.focusScope.focus(this.focusScope.focusKey, 'resume');
   }
 
@@ -212,6 +252,7 @@ export class W3uView {
   }
 
   handleAction(action: Action): void {
+    this.refreshPins();
     if (isFocusMove(action) && this.ringHidden()) {
       this.request(this.focusScope.focusKey, 'key');
       return;
@@ -227,6 +268,7 @@ export class W3uView {
       return;
     }
     if (focused.region === 'group') this.groupAction(action, focused.index);
+    else if (focused.region === 'pin') this.pinAction(action, focused.index);
     else this.tileAction(action, focused.index);
   }
 
@@ -292,6 +334,7 @@ export class W3uView {
     if (!parsed) return false;
     if (parsed.region === 'detail') return this.mode === 'detail';
     if (this.mode !== 'library') return false;
+    if (parsed.region === 'pin') return this.pinRequest(parsed.index) !== null;
     return parsed.index < (parsed.region === 'group' ? this.groups.length : this.stations.length);
   }
 
@@ -359,6 +402,98 @@ export class W3uView {
     return true;
   }
 
+  // --- showing a group in Live ---
+
+  // What the row at `index` adds to Live, or null when it offers nothing (or
+  // the host gave no way to). The list it sits in is the current level.
+  private pinRequest(index: number): GroupPinRequest | null {
+    const group = this.groups[index];
+    if (!group || !this.handlers.pins) return null;
+    return pinRequestFor(group, this.groupLabel(group, index), this.level.url, this.levels.length - 1);
+  }
+
+  // Drops what was read when the service's pins changed; true when it did.
+  private syncPins(): boolean {
+    const pins = this.handlers.pins;
+    if (!pins) return false;
+    const revision = pins.revision();
+    if (revision === this.pinRevision) return false;
+    this.pinRevision = revision;
+    this.pinState.clear();
+    return true;
+  }
+
+  private isPinned(request: GroupPinRequest): boolean {
+    const pins = this.handlers.pins;
+    if (!pins) return false;
+    const key = pinKeyOf(request);
+    let pinned = this.pinState.get(key);
+    if (pinned === undefined) {
+      pinned = pins.isPinned(request.url, request.group);
+      this.pinState.set(key, pinned);
+    }
+    return pinned;
+  }
+
+  // OK on the control: add the row to Live, or take it out. Only that row
+  // shows it is working, and a second OK on it waits for the first.
+  private togglePin(index: number): void {
+    const request = this.pinRequest(index);
+    const pins = this.handlers.pins;
+    if (!request || !pins) return;
+    const key = pinKeyOf(request);
+    if (this.pinBusy.has(key)) return;
+    const wanted = !this.isPinned(request);
+    this.pinBusy.add(key);
+    this.renderLibrary();
+    const settled = (result: GroupPinResult): void => {
+      this.pinBusy.delete(key);
+      this.pinState.delete(key);
+      this.syncPins();
+      if (!result.ok) this.handlers.onNotice?.(pinFailureCopy(result.reason));
+      this.renderLibrary();
+    };
+    let done: Promise<GroupPinResult>;
+    try {
+      done = pins.setPinned(request, wanted);
+    } catch {
+      done = Promise.resolve({ ok: false, reason: 'storage' });
+    }
+    done.then(settled, () => settled({ ok: false, reason: 'storage' }));
+  }
+
+  // Takes the service's notices (once) and shows them one after another.
+  private surfaceNotices(): void {
+    const pins = this.handlers.pins;
+    if (!pins) return;
+    const notices = pins.takeNotices();
+    for (const notice of notices.slice(0, NOTICE_MAX)) this.noticeQueue.push(pinNoticeCopy(notice));
+    this.nextNotice();
+  }
+
+  private nextNotice(): void {
+    if (this.noticeTimer !== null) return;
+    const message = this.noticeQueue.shift();
+    if (message === undefined) return;
+    this.handlers.onNotice?.(message);
+    this.noticeTimer = setTimeout(() => {
+      this.noticeTimer = null;
+      this.nextNotice();
+    }, NOTICE_GAP_MS);
+  }
+
+  // The control on a row: an outline pin, or a filled one once the row is in
+  // Live. The spinner replaces the pin while the service works. The glyph is
+  // the only visual; the screen-reader label names the state and aria-pressed
+  // carries it.
+  private pinChip(request: GroupPinRequest, index: number): Safe {
+    const busy = this.pinBusy.has(pinKeyOf(request));
+    const pinned = this.isPinned(request);
+    return html`<span class="w3u-pin${pinned ? ' w3u-pin-on' : ''}${busy ? ' w3u-pin-busy' : ''}" role="button"
+          data-focusable data-key="p:${index}" aria-busy="${busy ? 'true' : 'false'}"
+          aria-pressed="${pinned ? 'true' : 'false'}" aria-label="${t(pinned ? 'w3u.pinned' : 'w3u.pinAction')}"><span class="w3u-glyph">${busy ? '' : raw(pinIcon(pinned))}</span></span>`;
+  }
+
   // --- keys ---
 
   private groupAction(action: Action, index: number): void {
@@ -371,6 +506,10 @@ export class W3uView {
         if (index < this.groups.length - 1) this.request(`g:${index + 1}`, 'key');
         return;
       case 'right':
+        // A row that can be added to Live offers that first; OK still opens it.
+        if (this.pinRequest(index)) this.request(`p:${index}`, 'key');
+        else this.chooseGroup(index);
+        return;
       case 'select':
         this.chooseGroup(index);
         return;
@@ -380,6 +519,37 @@ export class W3uView {
       default:
         return;
     }
+  }
+
+  // The "Show in Live" control on a row: Left returns to the row, Right
+  // opens it, OK adds or removes it, and Up / Down stay on the control column.
+  private pinAction(action: Action, index: number): void {
+    switch (action) {
+      case 'select':
+        this.togglePin(index);
+        return;
+      case 'left':
+      case 'back':
+        this.request(`g:${index}`, action === 'back' ? 'back' : 'key');
+        return;
+      case 'right':
+        this.chooseGroup(index);
+        return;
+      case 'up':
+        if (index > 0) this.request(this.railKey(index - 1), 'key');
+        else this.handlers.onRevealTabBar();
+        return;
+      case 'down':
+        if (index < this.groups.length - 1) this.request(this.railKey(index + 1), 'key');
+        return;
+      default:
+        return;
+    }
+  }
+
+  // The key a row answers to when moving along the control column.
+  private railKey(index: number): string {
+    return this.pinRequest(index) ? `p:${index}` : `g:${index}`;
   }
 
   // Back from a group list goes up one playlist level, and out of the Library
@@ -476,7 +646,7 @@ export class W3uView {
       link.ready = true;
       link.cut = cutOf(list);
       const row = this.groups.indexOf(group);
-      const onRow = this.focusScope.focusKey === `g:${row}`;
+      const onRow = this.focusScope.focusKey === `g:${row}` || this.focusScope.focusKey === `p:${row}`;
       this.renderLibrary();
       if (onRow) this.request('t:0', this.placementVia() ?? 'key');
       return;
@@ -750,6 +920,8 @@ export class W3uView {
 
   private groupRow(group: W3uGroup, index: number, active: boolean): Safe {
     const link = group.link;
+    const request = this.pinRequest(index);
+    const chip = request ? this.pinChip(request, index) : '';
     if (link) {
       const label = this.groupLabel(group, index);
       const art = html`<span class="w3u-link-art">${label.charAt(0)}${link.image ? html`<img src="${link.image}" alt="" loading="lazy" onerror="this.style.display='none'">` : ''}</span>`;
@@ -769,15 +941,18 @@ export class W3uView {
         <div class="w3u-group w3u-group-link${active ? ' active' : ''}" data-focusable data-key="g:${index}"
              style="top:${index * GROUP_ROW_STRIDE}px">
           ${art}
-          <span class="w3u-group-label">${label}</span>
+          ${request ? html`<span class="w3u-group-text"><span class="w3u-group-label">${label}</span>${chip}</span>`
+            : html`<span class="w3u-group-label">${label}</span>`}
           <span class="w3u-group-more w3u-glyph">${raw(CHEVRON_RIGHT_ICON)}</span>
         </div>
       `;
     }
+    const name = this.groupLabel(group, index);
     return html`
       <div class="w3u-group${active ? ' active' : ''}" data-focusable data-key="g:${index}"
            style="top:${index * GROUP_ROW_STRIDE}px">
-        <span class="w3u-group-label">${this.groupLabel(group, index)}</span>
+        ${request ? html`<span class="w3u-group-text"><span class="w3u-group-label">${name}</span>${chip}</span>`
+          : html`<span class="w3u-group-label">${name}</span>`}
         <span class="w3u-group-count">${group.stations.length}</span>
       </div>
     `;

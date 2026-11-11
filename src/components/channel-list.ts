@@ -8,6 +8,7 @@ import type {
   ChannelScope,
   NumberEvent,
 } from '../types';
+import { UNCATEGORIZED_GROUP } from '../types';
 import { SpatialNav, isFocusMove } from '../navigation/spatial-nav';
 import { KeyHandler } from '../navigation/key-handler';
 import { InputMode } from '../navigation/input-mode';
@@ -22,7 +23,7 @@ import { StorageService } from '../services/storage-service';
 import { RecentlyWatchedService, type RecentlyWatchedItem } from '../services/recently-watched';
 import { ChannelHealthService } from '../services/channel-health';
 import { groupIcon } from './group-icon';
-import { NAV_HORIZONTAL_ICON, favoriteIcon } from './icons';
+import { NAV_HORIZONTAL_ICON, favoriteIcon, pinIcon } from './icons';
 import { backKey, okHint } from './key-hints';
 import { channelLockBadge, liveGroupLockBadge } from './parental-badge';
 import { showToast } from './toast';
@@ -43,6 +44,7 @@ type PreviewHintState = 'off' | 'ready' | 'active';
 type RowList = 'group' | 'channel';
 // 'render': a re-render that requests no focus of its own.
 type SyncVia = Via | 'render';
+type PinnedGroup = ReturnType<typeof PlaylistService.pinnedLiveGroups>[number];
 
 let liveList: ChannelList | null = null;
 type ChannelSelectionMode = 'expand-current' | 'fullscreen';
@@ -119,6 +121,11 @@ export class ChannelList {
   private groupEntriesPlaylist = '';
   private groupEntriesRevision = -1;
   private groupEntriesLocale: SupportedLocale | null = null;
+  // Pinned Live groups by group id, read again whenever the service's pins change.
+  private pinnedGroups = new Map<string, PinnedGroup>();
+  private pinRevisionSeen = -1;
+  // Group ids being unpinned right now.
+  private readonly pinBusy = new Set<string>();
 
   private authorizeEdit: (proceed: () => void) => void;
   constructor(
@@ -283,6 +290,7 @@ export class ChannelList {
     // The selected playlist may have just been deleted in settings — fall back to All.
     if (this.currentPlaylist && !tabs.some(t => t.id === this.currentPlaylist)) this.currentPlaylist = '';
     const showTabs = tabs.length > 1;
+    this.readPins();
     const groups = this.getGroupEntries();
     if (!groups.some(group => group.id === this.currentGroup)) this.currentGroup = 'builtin:all';
     if (ensureFocus || this.recentItems.length === 0) {
@@ -298,6 +306,10 @@ export class ChannelList {
     const editing = this.editor.isChannelEditing;
     const managingFavorites = this.editor.isManagingFavorites;
     const allSourcesDisabled = PlaylistService.allSourcesDisabled;
+    // Prefix only outside every edit mode: channel editing or favourite picking.
+    const rowLabel = this.currentGroup === 'builtin:all' && !this.editor.isEditing
+      ? this.groupPrefixLabeler()
+      : null;
 
     // Capture the focus key before morph so focus lands on the same item
     // after it. Focus a re-render already detached waits for the next key.
@@ -331,11 +343,11 @@ export class ChannelList {
     }
     const range = this.channelVirtualizer.getRange(filteredChannels.length, viewportHeight);
     const groupViewportHeight = previousGroupList?.clientHeight || CHANNEL_VIEWPORT_FALLBACK;
-    const wantedGroupPosition = wantedKey && wantedKey.indexOf('g:') === 0
-      ? groups.findIndex(group => `g:${group.id}` === wantedKey)
+    const wantedGroupPosition = wantedKey && (wantedKey.indexOf('g:') === 0 || wantedKey.indexOf('gp:') === 0)
+      ? groups.findIndex(group => `g:${group.id}` === wantedKey || `gp:${group.id}` === wantedKey)
       : -1;
     const focusedGroupPosition = wantedGroupPosition >= 0 ? wantedGroupPosition : parseInt(
-      attached?.dataset.groupPosition ?? '-1',
+      attached?.closest<HTMLElement>('[data-group-position]')?.dataset.groupPosition ?? '-1',
       10,
     );
     if (ensureFocus && focusedGroupPosition >= 0) {
@@ -404,6 +416,7 @@ export class ChannelList {
                           favs,
                           range.start + offset,
                           this.channelVirtualizer.getItemOffset(range.start + offset),
+                          rowLabel,
                         ))}
                     </div>
                   `
@@ -596,10 +609,21 @@ export class ChannelList {
 
   /** Back inside the channel list: close what is open, else let the view handle it. */
   handleBack(): boolean {
-    return this.editor.handleBack();
+    if (this.editor.handleBack()) return true;
+    // Back from a "Remove from Live" chip returns to its row.
+    const focused = this.nav.focused;
+    const row = focused?.dataset.pinGroup !== undefined
+      ? focused.closest<HTMLElement>('[data-group-position]') : null;
+    if (!row) return false;
+    this.nav.focus(row);
+    return true;
   }
 
   handleAction(action: Action, event?: NumberEvent): boolean {
+    // A pin or unpin made elsewhere since the last draw shows before the key acts.
+    if (this.pinRevisionSeen >= 0 && this.pinRevisionSeen !== PlaylistService.pinnedRevision) {
+      this.render(false);
+    }
     const handled = this.dispatchAction(action, event);
     this.syncScope('key');
     return handled;
@@ -659,7 +683,9 @@ export class ChannelList {
         // A row a re-render removed is no longer what the list shows.
         if (!focused || !this.container.contains(focused)) break;
 
-        if (focused.dataset.editChannels !== undefined) {
+        if (focused.dataset.pinGroup !== undefined) {
+          void this.unpinGroup(focused.dataset.pinGroup);
+        } else if (focused.dataset.editChannels !== undefined) {
           this.enterEditMode();
         } else if (focused.dataset.favoriteManage !== undefined) {
           this.editor.enterFavoriteManagement();
@@ -720,6 +746,8 @@ export class ChannelList {
     const focused = this.nav.focused;
     if (!focused) return false;
 
+    if (focused.dataset.pinGroup !== undefined) return this.pinChipAction(action, focused);
+
     if (focused.dataset.playlist !== undefined) {
       const tabs = Array.from(
         this.container.querySelectorAll<HTMLElement>('.playlist-tab[data-playlist]'),
@@ -748,6 +776,12 @@ export class ChannelList {
     }
 
     if (action === 'right' && focused.dataset.group !== undefined) {
+      // A pinned group offers its "Remove from Live" chip before the channels.
+      const chip = focused.querySelector<HTMLElement>('[data-pin-group]');
+      if (chip) {
+        this.nav.focus(chip);
+        return true;
+      }
       return this.nav.focusContainerEntry('.channel-main');
     }
 
@@ -756,6 +790,55 @@ export class ChannelList {
       return this.focusActivePlaylist();
     }
     return false;
+  }
+
+  // The "Remove from Live" chip on a pinned group: Left returns to the row,
+  // Right enters the channels, Up / Down step to the neighboring rows, and OK
+  // removes the pin (handled with the other selects).
+  private pinChipAction(action: Action, chip: HTMLElement): boolean {
+    const row = chip.closest<HTMLElement>('[data-group-position]');
+    if (action === 'left') {
+      if (row) this.nav.focus(row);
+      return true;
+    }
+    if (action === 'right') return this.nav.focusContainerEntry('.channel-main');
+    if (action === 'up' || action === 'down' || action === 'channel_up' || action === 'channel_down') {
+      const up = action === 'up' || action === 'channel_up';
+      const next = parseInt(row?.dataset.groupPosition ?? '', 10) + (up ? -1 : 1);
+      if (next >= 0 && next < this.getGroupEntries().length) this.focusRow('group', next);
+      return true;
+    }
+    return false;
+  }
+
+  private readPins(): void {
+    this.pinRevisionSeen = PlaylistService.pinnedRevision;
+    this.pinnedGroups = new Map(
+      PlaylistService.pinnedLiveGroups().map(entry => [`source:${entry.group}`, entry]),
+    );
+  }
+
+  // Takes the group out of Live. A whole-list pin owns every group of that
+  // list, so the toast names the list to explain why they all disappear.
+  private async unpinGroup(id: string): Promise<void> {
+    const entry = this.pinnedGroups.get(id);
+    if (!entry || this.pinBusy.has(id)) return;
+    const position = this.getGroupEntries().findIndex(group => group.id === id);
+    this.pinBusy.add(id);
+    this.render(false);
+    let removed = false;
+    try {
+      removed = await PlaylistService.unpinLiveGroup(entry.group);
+    } catch {
+      removed = false;
+    }
+    this.pinBusy.delete(id);
+    const holdsFocus = this.nav.focused?.dataset.pinGroup === id;
+    this.render(false);
+    if (removed && entry.groupKey === '') showToast(t('w3u.pinRemovedList', { name: entry.name }));
+    if (holdsFocus && !this.container.contains(this.nav.focused)) {
+      this.focusRow('group', Math.min(Math.max(position, 0), this.getGroupEntries().length - 1));
+    }
   }
 
   private hasPlaylistTabs(): boolean {
@@ -816,6 +899,7 @@ export class ChannelList {
     const count = g.id === 'builtin:recently-watched'
       ? this.recentItems.length
       : PlaylistService.getGroupCount(g.id, this.currentPlaylist || undefined);
+    const pinned = isSource && !this.editor.isEditing && this.pinnedGroups.has(g.id);
 
     return html`
       <div class="group-item ${g.id === this.currentGroup ? 'active' : ''} ${hidden ? 'hidden-entry' : ''} ${grabbed ? 'grabbed' : ''}"
@@ -827,9 +911,18 @@ export class ChannelList {
           ? html`<input class="edit-text-input" type="text" value="${this.editor.renameValue(g.label)}">`
           : html`<span class="group-name">${
               raw(liveGroupLockBadge(g.id, this.currentPlaylist))}${g.label}</span>`}
+        ${pinned ? this.pinChip(g.id) : ''}
         <span class="group-count">${count}</span>
       </div>
     `;
+  }
+
+  // The filled pin marks a group that is in Live; the glyph is its only visual.
+  private pinChip(id: string): Safe {
+    const busy = this.pinBusy.has(id);
+    return html`<span class="group-pin-slot"><span class="group-pin${busy ? ' group-pin-busy' : ''}" role="button"
+          data-focusable data-key="gp:${id}" data-pin-group="${id}" aria-busy="${busy ? 'true' : 'false'}"
+          aria-label="${t('w3u.pinRemove')}"><span class="group-pin-glyph">${busy ? '' : raw(pinIcon(true))}</span></span></span>`;
   }
 
   setPlaying(idx: number, catchupStart?: number | null): void {
@@ -937,8 +1030,9 @@ export class ChannelList {
 
   // A virtual list row's place in the model, rendered or not.
   private rowPosition(key: string): { list: RowList; position: number } | null {
-    if (key.indexOf('g:') === 0) {
-      const position = this.getGroupEntries().findIndex(group => `g:${group.id}` === key);
+    if (key.indexOf('g:') === 0 || key.indexOf('gp:') === 0) {
+      const position = this.getGroupEntries()
+        .findIndex(group => `g:${group.id}` === key || `gp:${group.id}` === key);
       return position < 0 ? null : { list: 'group', position };
     }
     if (key.indexOf('ch:') !== 0 || this.currentGroup === 'builtin:recently-watched') return null;
@@ -970,7 +1064,30 @@ export class ChannelList {
     return row?.dataset.key ?? null;
   }
 
-  private renderChannel(ch: Channel, favs: string[], position: number, top: number): Safe {
+  // In All, a channel in a multi-channel group reads "<group> - <name>" so
+  // repeated names stay apart. Sizes are looked up once per group per render.
+  private groupPrefixLabeler(): (ch: Channel) => string | null {
+    const playlist = this.currentPlaylist || undefined;
+    const sizes = new Map<string, number>();
+    return ch => {
+      let size = sizes.get(ch.group);
+      if (size === undefined) {
+        size = PlaylistService.getByGroup(`source:${ch.group}`, playlist).length;
+        sizes.set(ch.group, size);
+      }
+      const group = ch.group === UNCATEGORIZED_GROUP ? '' : ch.group.trim();
+      return size > 1 && group ? `${group} - ${ch.name}` : null;
+    };
+  }
+
+  private renderChannel(
+    ch: Channel,
+    favs: string[],
+    position: number,
+    top: number,
+    rowLabel: ((ch: Channel) => string | null) | null = null,
+  ): Safe {
+    const composed = rowLabel?.(ch) ?? null;
     const globalIdx = PlaylistService.indexOf(ch);
     const epgId = EpgService.findChannelId(ch);
     const nowPlaying = epgId ? EpgService.getNowPlaying(epgId) : null;
@@ -987,7 +1104,8 @@ export class ChannelList {
         grabbed ? 'grabbed' : ''} ${selectedFavorite ? 'favorite-selected' : ''}"
            data-key="ch:${String(globalIdx)}"
            data-focusable data-channel-index="${globalIdx}"
-           data-list-position="${position}" style="top:${top}px">
+           data-list-position="${position}" style="top:${top}px"
+           ${composed ? html`aria-label="${composed}"` : ''}>
         <div class="channel-number">${globalIdx + 1}</div>
         ${this.renderLogo(ch)}
         <div class="channel-info">
@@ -995,7 +1113,7 @@ export class ChannelList {
             ? html`<input class="edit-text-input" type="text" value="${this.editor.renameValue(ch.name)}">`
             : html`<div class="channel-name">${raw(channelLockBadge(ch))}${
                 showFavoriteStar ? raw(favoriteIcon(true)) : ''
-              }${ch.name}</div>`}
+              }${composed ?? ch.name}</div>`}
           ${this.editor.isChannelEditing && ch.sourceName
             ? html`<div class="channel-now channel-source-name">${ch.sourceName}</div>`
             : (nowPlaying
@@ -1125,10 +1243,11 @@ export class ChannelList {
       const key = this.detachedKey();
       return key === null ? null : this.rowPosition(key);
     }
-    const list: RowList | null = focused.dataset.groupPosition !== undefined ? 'group'
+    const groupPosition = focused.closest<HTMLElement>('[data-group-position]')?.dataset.groupPosition;
+    const list: RowList | null = groupPosition !== undefined ? 'group'
       : focused.dataset.listPosition !== undefined ? 'channel' : null;
     if (!list || this.rowVisibility(focused, list) !== 'none') return null;
-    const position = list === 'group' ? focused.dataset.groupPosition : focused.dataset.listPosition;
+    const position = list === 'group' ? groupPosition : focused.dataset.listPosition;
     return { list, position: parseInt(position ?? '', 10) };
   }
 

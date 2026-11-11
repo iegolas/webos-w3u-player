@@ -9,6 +9,7 @@ type HlsListener = (event: string, data?: {
   fatal?: boolean;
   type?: string;
   details?: string;
+  levels?: unknown[];
 }) => void;
 
 class FakeLoader {}
@@ -34,6 +35,7 @@ class FakeHls {
   readonly loadSource = vi.fn();
   readonly attachMedia = vi.fn();
   readonly startLoad = vi.fn();
+  readonly stopLoad = vi.fn();
   readonly recoverMediaError = vi.fn();
   audioTracks = [
     { name: 'Track 1', lang: 'l1', default: true, channels: '2' },
@@ -178,6 +180,11 @@ const fakeShaka = {
       Category: { DRM: 6 },
       Code: {
         BAD_HTTP_STATUS: 1001,
+        UNABLE_TO_GUESS_MANIFEST_TYPE: 4000,
+        DASH_INVALID_XML: 4001,
+        DASH_NO_SEGMENT_INFO: 4002,
+        DASH_EMPTY_ADAPTATION_SET: 4003,
+        DASH_EMPTY_PERIOD: 4004,
         LICENSE_REQUEST_FAILED: 6007,
         LICENSE_RESPONSE_REJECTED: 6008,
       },
@@ -196,6 +203,7 @@ function callbacks(overrides: Partial<PlayerPipelineOptions> = {}): PlayerPipeli
     isCatchup: () => false,
     headerPlayback: () => 'luna',
     onError: vi.fn(),
+    onStreamOffline: vi.fn(),
     onAudioTracksUpdated: vi.fn(),
     onSubtitleTracksUpdated: vi.fn(),
     onPlaybackPathChange: vi.fn(),
@@ -612,6 +620,71 @@ describe('PlayerPipeline HLS integration', () => {
     expect(opts.onError).toHaveBeenCalledOnce();
   });
 
+  it('marks a parsed manifest with no levels offline without starting playback', async () => {
+    installPreviewGlobals();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(contentTypeResponse(
+      'application/vnd.apple.mpegurl',
+    )));
+    const opts = callbacks();
+    const pipeline = new PlayerPipeline(opts);
+    const video = videoElement();
+    pipeline.setVideoElement(video);
+    pipeline.load('http://host/a', null);
+    await settle();
+    const hls = FakeHls.instances[0];
+
+    hls.emit(FakeHls.Events.MANIFEST_PARSED, { levels: [] });
+
+    expect(opts.onStreamOffline).toHaveBeenCalledOnce();
+    expect(hls.stopLoad).toHaveBeenCalledOnce();
+    expect(hls.startLoad).not.toHaveBeenCalled();
+    expect(video.play).not.toHaveBeenCalled();
+  });
+
+  it('marks an empty live level offline instead of retrying it', async () => {
+    installPreviewGlobals();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(contentTypeResponse(
+      'application/vnd.apple.mpegurl',
+    )));
+    const opts = callbacks();
+    const pipeline = new PlayerPipeline(opts);
+    const video = videoElement();
+    pipeline.setVideoElement(video);
+    pipeline.load('http://host/a', null);
+    await settle();
+    const hls = FakeHls.instances[0];
+
+    hls.emit(FakeHls.Events.ERROR, {
+      fatal: false,
+      type: FakeHls.ErrorTypes.NETWORK_ERROR,
+      details: 'levelEmptyError',
+    });
+
+    expect(opts.onStreamOffline).toHaveBeenCalledOnce();
+    expect(hls.stopLoad).toHaveBeenCalledOnce();
+    expect(hls.startLoad).not.toHaveBeenCalled();
+    expect(video.play).not.toHaveBeenCalled();
+  });
+
+  it('keeps playing a manifest that has levels', async () => {
+    installPreviewGlobals();
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(contentTypeResponse(
+      'application/vnd.apple.mpegurl',
+    )));
+    const opts = callbacks();
+    const pipeline = new PlayerPipeline(opts);
+    const video = videoElement();
+    pipeline.setVideoElement(video);
+    pipeline.load('http://host/a', null);
+    await settle();
+    const hls = FakeHls.instances[0];
+
+    hls.emit(FakeHls.Events.MANIFEST_PARSED, { levels: [{}] });
+
+    expect(opts.onStreamOffline).not.toHaveBeenCalled();
+    expect(video.play).toHaveBeenCalledOnce();
+  });
+
   it('exposes HLS track controls and a stream-info snapshot', async () => {
     installPreviewGlobals();
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(contentTypeResponse(
@@ -680,6 +753,15 @@ describe('PlayerPipeline desktop DASH', () => {
 
     expect(lastShakaPlayer()?.load).toHaveBeenCalledWith('http://host/a.mpd');
     expect(pipeline.isMseActive()).toBe(true);
+  });
+
+  it('marks a manifest Shaka cannot parse offline', async () => {
+    const { opts } = await loadDash();
+
+    lastShakaPlayer()?.emit('error', { severity: 2, code: 4001 });
+
+    expect(opts.onStreamOffline).toHaveBeenCalledOnce();
+    expect(opts.onError).not.toHaveBeenCalled();
   });
 
   it('configures Widevine and applies license request headers', async () => {
@@ -1122,5 +1204,60 @@ describe('PlayerPipeline manifest loading', () => {
     expect(signals[1].aborted).toBe(false);
     pipeline.destroy();
     await Promise.all([first, second]);
+  });
+
+  it('reports an empty manifest as offline instead of probing it again', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('', { headers: { 'content-type': 'application/vnd.apple.mpegurl' } }),
+    ));
+    const opts = callbacks();
+    const pipeline = new PlayerPipeline(opts);
+    const internals = pipeline as unknown as {
+      loadManifest(url: string, seq: number, loadToken: number): Promise<unknown>;
+    };
+
+    await internals.loadManifest('http://host/a', 0, 0);
+
+    expect(opts.onStreamOffline).toHaveBeenCalledOnce();
+    expect(opts.onManifest).not.toHaveBeenCalled();
+  });
+
+  it('reports a playlist with no segment or variant as offline', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('#EXTM3U\n#EXT-X-VERSION:3\n')));
+    const opts = callbacks();
+    const pipeline = new PlayerPipeline(opts);
+    const internals = pipeline as unknown as {
+      loadManifest(url: string, seq: number, loadToken: number): Promise<unknown>;
+    };
+
+    await internals.loadManifest('http://host/a', 0, 0);
+
+    expect(opts.onStreamOffline).toHaveBeenCalledOnce();
+    expect(opts.onManifest).not.toHaveBeenCalled();
+  });
+
+  it('keeps a non-empty media playlist playable', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('#EXTM3U\n#EXTINF:4,\nseg.ts\n')));
+    const opts = callbacks();
+    const pipeline = new PlayerPipeline(opts);
+    const internals = pipeline as unknown as {
+      loadManifest(url: string, seq: number, loadToken: number): Promise<unknown>;
+    };
+
+    await internals.loadManifest('http://host/a', 0, 0);
+
+    expect(opts.onStreamOffline).not.toHaveBeenCalled();
+    expect(opts.onManifest).toHaveBeenCalledOnce();
+  });
+
+  it('reports an empty direct HLS VOD before it plays', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response('')));
+    const opts = callbacks();
+    const pipeline = new PlayerPipeline(opts);
+    pipeline.setVideoElement(videoElement());
+
+    pipeline.load('http://host/a.m3u8', null, { direct: true });
+
+    await vi.waitFor(() => expect(opts.onStreamOffline).toHaveBeenCalledOnce());
   });
 });

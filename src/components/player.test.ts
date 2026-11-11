@@ -1335,6 +1335,57 @@ describe('Player live playback', () => {
   });
 });
 
+describe('Player offline stream', () => {
+  const offline = (target: Player): void => {
+    (target as unknown as {
+      pipeline: { callbacks: { onStreamOffline(): void } };
+    }).pipeline.callbacks.onStreamOffline();
+  };
+
+  it('shows the offline message and advances without reconnecting', async () => {
+    playlistMock.channels = [{}, {}];
+    player.play(0);
+    await flush();
+    const pipeline = (player as unknown as {
+      pipeline: {
+        load: (...args: unknown[]) => void;
+        escalate(): boolean;
+      };
+    }).pipeline;
+    const load = vi.spyOn(pipeline, 'load');
+    const escalate = vi.spyOn(pipeline, 'escalate');
+    load.mockClear();
+    playlistMock.getByIndex.mockClear();
+
+    offline(player);
+
+    const osd = container.querySelector('#player-osd')!;
+    expect(osd.textContent).toContain('This stream is offline (empty playlist).');
+    expect(osd.textContent).not.toContain('Reconnecting');
+    expect(load).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1999);
+    expect(playlistMock.getByIndex).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(playlistMock.getByIndex).toHaveBeenCalledWith(1);
+    expect(load).toHaveBeenCalledOnce();
+    expect(escalate).not.toHaveBeenCalled();
+    expect(healthMock.recordPlaybackFailure).toHaveBeenCalledWith(CHANNEL, 'empty_manifest');
+  });
+
+  it('advances a catch-up stream the same way', async () => {
+    player.play(0, CATCHUP);
+    await flush();
+    playlistMock.getByIndex.mockClear();
+
+    offline(player);
+
+    expect(container.querySelector('#player-osd')?.textContent)
+      .toContain('This stream is offline (empty playlist).');
+    vi.advanceTimersByTime(2000);
+    expect(playlistMock.getByIndex).toHaveBeenCalledWith(1);
+  });
+});
+
 describe('Player detached channel playback', () => {
   const DETACHED = {
     id: 'w1', name: 'Linked One', logo: 'http://host/l1.png', group: '', url: 'http://host/w1',
@@ -1361,6 +1412,20 @@ describe('Player detached channel playback', () => {
     expect(player.getCurrentChannel()).toBe(CHANNEL);
     expect(player.getCurrentIndex()).toBe(0);
     expect(video.src).toContain(CHANNEL.url);
+  });
+
+  it('shows the offline message on a detached title without stepping the playlist', async () => {
+    player.playChannel(DETACHED);
+    await flush();
+    playlistMock.getByIndex.mockClear();
+
+    (player as unknown as { pipeline: { callbacks: { onStreamOffline(): void } } })
+      .pipeline.callbacks.onStreamOffline();
+
+    expect(container.querySelector('#player-osd')?.textContent)
+      .toContain('This stream is offline (empty playlist).');
+    vi.advanceTimersByTime(2000);
+    expect(playlistMock.getByIndex).not.toHaveBeenCalled();
   });
 
   it('loads a detached embed through the resolved source', () => {
@@ -1926,6 +1991,21 @@ describe('Player VOD mode', () => {
     player = new Player(container, () => {});
   });
   afterEach(() => { container.remove(); vi.restoreAllMocks(); });
+
+  it('fails a VOD with the offline message', async () => {
+    const r = req();
+    vi.mocked(showToast).mockClear();
+    player.init(fakeVideo(3600));
+    player.playVod(r);
+    await flush();
+
+    (player as unknown as { pipeline: { callbacks: { onStreamOffline(): void } } })
+      .pipeline.callbacks.onStreamOffline();
+
+    expect(showToast).toHaveBeenCalledWith('This stream is offline (empty playlist).');
+    expect(r.onBack).toHaveBeenCalledOnce();
+    expect(player.isVod()).toBe(false);
+  });
 
   it('defers VOD playback until the authorizer runs the action', () => {
     let deferred: (() => void) | null = null;

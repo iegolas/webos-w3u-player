@@ -137,6 +137,8 @@ export class Player {
   private liveHistoryTimer: ReturnType<typeof setTimeout> | null = null;
   private errorAdvanceTimer: ReturnType<typeof setTimeout> | null = null;
   private errorRetryPending = false;
+  // This load's manifest was empty: it cannot recover, so never reconnect.
+  private streamOffline = false;
   // Manual A/V resync (catch-up / VOD): true from the resync seek until playback
   // resumes, gating the "Resyncing…" message and debouncing repeat presses.
   private resyncing = false;
@@ -204,6 +206,7 @@ export class Player {
       isCatchup: () => this.catchupInfo !== null,
       headerPlayback: () => StorageService.getHeaderPlayback(),
       onError: reason => this.onError(reason),
+      onStreamOffline: () => this.handleStreamOffline(),
       onAudioTracksUpdated: () => {
         this.tracks.applyHlsAudioSelection();
         this.tracks.applyLunaAudioSelection();
@@ -1141,6 +1144,7 @@ export class Player {
   stop(): void {
     if (this.liveSessionActive) this.rememberLiveAudio();
     this.liveSessionActive = false;
+    this.streamOffline = false;
     this.livePreviewMode = false;
     this.restoreLiveMute();
     this.playbackActive = false;
@@ -1245,6 +1249,7 @@ export class Player {
       this.channelPlayed = false;
       this.reopenResume = false;
     }
+    this.streamOffline = false;
     this.loadPlayed = false;
     this.tracks.resetForLoad();
     this.vodTracksLatePending = false;
@@ -1347,8 +1352,38 @@ export class Player {
     return true;
   }
 
+  // A manifest with no playable content: no reconnect and no header step can
+  // recover it, so surface it once and advance the way a live error does.
+  private handleStreamOffline(): void {
+    if (!this.playbackActive || this.streamOffline) return;
+    this.streamOffline = true;
+    this.cancelErrorAdvance();
+    if (this.liveSessionActive) {
+      this.livePlaybackStatus = 'error';
+      this.onPlaybackStateChanged();
+    }
+    this.cancelLiveHistoryTimer();
+    if (this.vod) {
+      const vod = this.vod;
+      this.vod = null;            // so stop() won't overwrite the resume point
+      this.stop();
+      showToast(t('player.streamOffline'));
+      vod.onBack();
+      return;
+    }
+    this.stallWatchdog.stop();
+    this.startupWatchdog.stop();
+    this.markLiveUnavailable('empty_manifest');
+    this.osd.updateMessage(t('player.streamOffline'));
+    this.errorAdvanceTimer = setTimeout(() => {
+      this.errorAdvanceTimer = null;
+      this.channelUp();
+    }, 2000);
+  }
+
   private onError(reason?: 'unsupported'): void {
     if (!this.playbackActive || this.wasPlayingBeforeHide) return;
+    if (this.streamOffline) return;
     if (this.errorAdvanceTimer !== null) return;
     if (this.escalateStartup()) return;
     if (this.reopenProxy()) return;

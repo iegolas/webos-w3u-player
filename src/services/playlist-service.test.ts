@@ -19,6 +19,9 @@ const { storageMock, cacheMock, fetchTextMock } = vi.hoisted(() => ({
     setLiveCategorySnapshot: vi.fn((id: string, snapshot: unknown) => {
       storageMock.liveCategorySnapshots.set(id, snapshot);
     }),
+    pinnedSelections: [] as Array<{ url: string; group: string; name: string; pinnedAt: number }>,
+    getPinnedSelections: vi.fn(),
+    setPinnedSelections: vi.fn(),
   },
   cacheMock: {
     getCachedPlaylist: vi.fn(),
@@ -29,7 +32,10 @@ const { storageMock, cacheMock, fetchTextMock } = vi.hoisted(() => ({
   fetchTextMock: vi.fn(),
 }));
 
-vi.mock('./storage-service', () => ({ StorageService: storageMock }));
+vi.mock('./storage-service', () => ({
+  StorageService: storageMock,
+  PINNED_SELECTIONS_MAX: 50,
+}));
 vi.mock('./idb-cache', () => cacheMock);
 vi.mock('../parsers/m3u-loader', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../parsers/m3u-loader')>();
@@ -129,6 +135,14 @@ beforeEach(() => {
   vi.clearAllMocks();
   storageMock.getFavorites.mockReturnValue([]);
   cacheMock.getCachedPlaylist.mockResolvedValue(null);
+  storageMock.pinnedSelections = [];
+  storageMock.getPinnedSelections.mockImplementation(() => storageMock.pinnedSelections.slice());
+  storageMock.setPinnedSelections.mockImplementation((list) => {
+    storageMock.pinnedSelections = list.slice();
+    return true;
+  });
+  PlaylistService.clearPinnedChannels();
+  CONFIG.W3U.LIVE_LINK_TITLES = 3000;
   PlaylistService.allChannels = [];
   PlaylistService.channels = [];
   PlaylistService.groups = [];
@@ -2026,5 +2040,364 @@ describe('PlaylistService customization', () => {
 http://stream/u4`);
     await PlaylistService.refresh();
     expect(PlaylistService.channels.map(c => c.name)).toEqual(['Bravo', 'Alpha', 'Delta']);
+  });
+});
+
+describe('PlaylistService pinned linked groups', () => {
+  const MAIN_URL = 'http://host/main.m3u';
+  const LINK_URL = 'http://host/list.m3u';
+  const OTHER_URL = 'http://host/other.m3u';
+  const SAME_URL = 'http://host/same.m3u';
+  const MAIN = `#EXTM3U
+#EXTINF:-1 group-title="News",Alpha
+http://stream/main1`;
+  const LINKED = `#EXTM3U
+#EXTINF:-1 group-title="Sports",A1
+http://stream/a1
+#EXTINF:-1 group-title="Sports",A2
+http://stream/a2
+#EXTINF:-1 group-title="Movies",M1
+http://stream/m1`;
+  const OTHER = `#EXTM3U
+#EXTINF:-1 group-title="Other",O1
+http://stream/o1`;
+  const SAME = `#EXTM3U
+#EXTINF:-1 group-title="Sports",S1
+http://stream/s1`;
+
+  function useSources(mainText = MAIN): void {
+    storageMock.getPlaylists.mockReturnValue([
+      { id: 'a', name: 'P1', url: MAIN_URL },
+    ]);
+    fetchTextMock.mockImplementation((url: string) => Promise.resolve(
+      url === MAIN_URL ? mainText
+        : url === OTHER_URL ? OTHER
+          : url === SAME_URL ? SAME
+            : LINKED,
+    ));
+  }
+
+  async function loadMain(mainText = MAIN): Promise<void> {
+    useSources(mainText);
+    await PlaylistService.refresh();
+  }
+
+  function pin(
+    group: string,
+    name: string,
+    depth = 1,
+    url = LINK_URL,
+  ): Promise<unknown> {
+    return PlaylistService.setGroupPinned({ url, group, name, depth }, true);
+  }
+
+  it('adds only the selected group after the main list', async () => {
+    await loadMain();
+
+    await expect(pin('Sports', 'Sports')).resolves.toEqual({ ok: true, channels: 2 });
+
+    expect(PlaylistService.channels.map(channel => channel.name))
+      .toEqual(['Alpha', 'A1', 'A2']);
+    expect(PlaylistService.channels[1].group).toBe('Sports');
+    expect(PlaylistService.channels[1].playlistIds).toHaveLength(1);
+    expect(PlaylistService.channels[1].playlistIds[0]).toMatch(/^link:/);
+    expect(storageMock.pinnedSelections).toEqual([
+      {
+        url: LINK_URL,
+        group: 'Sports',
+        name: 'Sports',
+        pinnedAt: expect.any(Number),
+      },
+    ]);
+  });
+
+  it('adds every group for a whole-list pin', async () => {
+    await loadMain();
+
+    await expect(pin('', 'List')).resolves.toEqual({ ok: true, channels: 3 });
+
+    expect(PlaylistService.channels.map(channel => channel.name))
+      .toEqual(['Alpha', 'A1', 'A2', 'M1']);
+    expect(PlaylistService.channels.slice(1).map(channel => channel.group))
+      .toEqual(['Sports', 'Sports', 'Movies']);
+  });
+
+  it('removes the overlay and the saved selection on unpin', async () => {
+    await loadMain();
+    await pin('Sports', 'Sports');
+
+    await expect(PlaylistService.setGroupPinned(
+      { url: LINK_URL, group: 'Sports', name: 'Sports', depth: 1 },
+      false,
+    )).resolves.toEqual({ ok: true, channels: 0 });
+
+    expect(PlaylistService.channels.map(channel => channel.name)).toEqual(['Alpha']);
+    expect(storageMock.pinnedSelections).toEqual([]);
+    expect(PlaylistService.isGroupPinned(LINK_URL, 'Sports')).toBe(false);
+  });
+
+  it('cancels a pin whose fetch is still in flight when it is removed', async () => {
+    await loadMain();
+    let release!: (text: string) => void;
+    fetchTextMock.mockImplementationOnce(() => new Promise((resolve) => {
+      release = resolve;
+    }));
+
+    const pinning = PlaylistService.setGroupPinned(
+      { url: LINK_URL, group: 'Sports', name: 'Sports', depth: 1 },
+      true,
+    );
+    await vi.waitFor(() => expect(fetchTextMock).toHaveBeenCalled());
+
+    await PlaylistService.setGroupPinned(
+      { url: LINK_URL, group: 'Sports', name: 'Sports', depth: 1 },
+      false,
+    );
+    release(LINKED);
+
+    await expect(pinning).resolves.toEqual({ ok: false, reason: 'canceled' });
+    expect(PlaylistService.channels.map(channel => channel.name)).toEqual(['Alpha']);
+    expect(storageMock.pinnedSelections).toEqual([]);
+  });
+
+  it('loads nothing when no group is pinned', async () => {
+    await loadMain();
+    fetchTextMock.mockClear();
+
+    await PlaylistService.loadPinnedSelections();
+
+    expect(fetchTextMock).not.toHaveBeenCalled();
+    expect(PlaylistService.channels.map(channel => channel.name)).toEqual(['Alpha']);
+  });
+
+  it('fetches only the distinct pinned urls at startup', async () => {
+    await loadMain();
+    storageMock.pinnedSelections = [
+      { url: LINK_URL, group: 'Sports', name: 'Sports', pinnedAt: 1 },
+      { url: `${LINK_URL}#section`, group: 'Movies', name: 'Movies', pinnedAt: 2 },
+      { url: OTHER_URL, group: 'Other', name: 'Other', pinnedAt: 3 },
+    ];
+    fetchTextMock.mockClear();
+
+    await PlaylistService.loadPinnedSelections();
+
+    expect(fetchTextMock.mock.calls.map(call => call[0]).sort())
+      .toEqual([LINK_URL, OTHER_URL].sort());
+    expect(PlaylistService.channels.map(channel => channel.name))
+      .toEqual(['Alpha', 'A1', 'A2', 'M1', 'O1']);
+
+    await PlaylistService.loadPinnedSelections();
+
+    expect(PlaylistService.channels.map(channel => channel.name))
+      .toEqual(['Alpha', 'A1', 'A2', 'M1', 'O1']);
+    expect(fetchTextMock.mock.calls.map(call => call[0]).sort())
+      .toEqual([LINK_URL, OTHER_URL].sort());
+  });
+
+  it('rejects a pin that would exceed the live title budget', async () => {
+    await loadMain();
+    CONFIG.W3U.LIVE_LINK_TITLES = 2;
+
+    await expect(pin('Sports', 'Sports')).resolves.toEqual({ ok: true, channels: 2 });
+    await expect(pin('Movies', 'Movies')).resolves.toEqual({ ok: false, reason: 'budget' });
+
+    expect(PlaylistService.channels.map(channel => channel.name))
+      .toEqual(['Alpha', 'A1', 'A2']);
+  });
+
+  it('rejects a pin fetched beyond the depth limit', async () => {
+    await loadMain();
+    fetchTextMock.mockClear();
+
+    await expect(pin('Sports', 'Sports', 4))
+      .resolves.toEqual({ ok: false, reason: 'depth' });
+
+    expect(fetchTextMock).not.toHaveBeenCalled();
+    expect(storageMock.pinnedSelections).toEqual([]);
+  });
+
+  it('reports and drops a pinned group that vanished from the list', async () => {
+    await loadMain();
+    storageMock.pinnedSelections = [
+      { url: LINK_URL, group: 'Gone', name: 'Gone', pinnedAt: 1 },
+    ];
+
+    await PlaylistService.loadPinnedSelections();
+
+    expect(PlaylistService.takePinnedLinkNotices()).toEqual([
+      { url: LINK_URL, group: 'Gone', name: 'Gone', reason: 'group_missing' },
+    ]);
+    expect(storageMock.pinnedSelections).toEqual([]);
+    expect(PlaylistService.channels.map(channel => channel.name)).toEqual(['Alpha']);
+  });
+
+  it('keeps main indexes stable across pin and unpin', async () => {
+    await loadMain();
+    const before = PlaylistService.channels.slice();
+
+    await pin('Sports', 'Sports');
+
+    before.forEach((channel, index) => {
+      expect(PlaylistService.channels[index]).toBe(channel);
+      expect(PlaylistService.indexOf(channel)).toBe(index);
+    });
+
+    await PlaylistService.setGroupPinned(
+      { url: LINK_URL, group: 'Sports', name: 'Sports', depth: 1 },
+      false,
+    );
+
+    before.forEach((channel, index) => {
+      expect(PlaylistService.channels[index]).toBe(channel);
+      expect(PlaylistService.indexOf(channel)).toBe(index);
+    });
+  });
+
+  it('plays a pinned channel by its live index', async () => {
+    await loadMain();
+    await pin('Sports', 'Sports');
+
+    const index = PlaylistService.channels.length - 1;
+    const pinned = PlaylistService.getByIndex(index);
+
+    expect(pinned?.name).toBe('A2');
+    expect(PlaylistService.indexOf(pinned!)).toBe(index);
+    expect(PlaylistService.getByIndex(index)).toBe(pinned);
+  });
+
+  it('skips a pinned title the main list already holds', async () => {
+    await loadMain(`#EXTM3U
+#EXTINF:-1 group-title="News",Alpha
+http://stream/a1`);
+
+    await expect(pin('Sports', 'Sports')).resolves.toEqual({ ok: true, channels: 1 });
+
+    expect(PlaylistService.channels.map(channel => channel.name)).toEqual(['Alpha', 'A2']);
+  });
+
+  it('puts a pinned group in the next free bucket on a name collision', async () => {
+    await loadMain(`#EXTM3U
+#EXTINF:-1 group-title="Sports",Alpha
+http://stream/main1`);
+
+    await pin('Sports', 'Sports');
+
+    expect(PlaylistService.channels[1].group).toBe('Sports 2');
+    expect(PlaylistService.getGroupsForPlaylist()).toContain('Sports 2');
+  });
+
+  it('maps a pinned group to the Live group it produced', async () => {
+    await loadMain();
+    expect(PlaylistService.pinnedLiveGroups()).toEqual([]);
+
+    await pin('Sports', 'Sports');
+
+    expect(PlaylistService.pinnedLiveGroups()).toEqual([
+      { group: 'Sports', url: LINK_URL, groupKey: 'Sports', name: 'Sports' },
+    ]);
+  });
+
+  it('maps collision-suffixed Live groups back to their own list', async () => {
+    await loadMain();
+    await pin('Sports', 'Sports');
+    await pin('Sports', 'Sports', 1, SAME_URL);
+
+    expect(PlaylistService.channels.map(channel => channel.name))
+      .toEqual(['Alpha', 'A1', 'A2', 'S1']);
+    expect(PlaylistService.channels.slice(3).map(channel => channel.group))
+      .toEqual(['Sports 2']);
+    expect(PlaylistService.pinnedLiveGroups()).toEqual([
+      { group: 'Sports', url: LINK_URL, groupKey: 'Sports', name: 'Sports' },
+      { group: 'Sports 2', url: SAME_URL, groupKey: 'Sports', name: 'Sports' },
+    ]);
+
+    await expect(PlaylistService.unpinLiveGroup('Sports 2')).resolves.toBe(true);
+
+    expect(PlaylistService.channels.map(channel => channel.name))
+      .toEqual(['Alpha', 'A1', 'A2']);
+    expect(PlaylistService.pinnedLiveGroups()).toEqual([
+      { group: 'Sports', url: LINK_URL, groupKey: 'Sports', name: 'Sports' },
+    ]);
+  });
+
+  it('maps every group of a whole-list pin to an empty groupKey', async () => {
+    await loadMain();
+
+    await pin('', 'List');
+
+    expect(PlaylistService.pinnedLiveGroups()).toEqual([
+      { group: 'Sports', url: LINK_URL, groupKey: '', name: 'List' },
+      { group: 'Movies', url: LINK_URL, groupKey: '', name: 'List' },
+    ]);
+  });
+
+  it('unpins the selection behind a mapped Live group', async () => {
+    await loadMain();
+    await pin('Sports', 'Sports');
+
+    await expect(PlaylistService.unpinLiveGroup('Sports')).resolves.toBe(true);
+
+    expect(PlaylistService.channels.map(channel => channel.name)).toEqual(['Alpha']);
+    expect(PlaylistService.pinnedLiveGroups()).toEqual([]);
+    expect(storageMock.pinnedSelections).toEqual([]);
+    await expect(PlaylistService.unpinLiveGroup('Sports')).resolves.toBe(false);
+  });
+
+  it('drops the mapping of a group that vanished from the list', async () => {
+    await loadMain();
+    await pin('Sports', 'Sports');
+    storageMock.pinnedSelections = [
+      { url: LINK_URL, group: 'Gone', name: 'Gone', pinnedAt: 2 },
+    ];
+    const before = PlaylistService.pinnedRevision;
+
+    await PlaylistService.loadPinnedSelections();
+
+    expect(PlaylistService.pinnedLiveGroups()).toEqual([]);
+    expect(PlaylistService.channels.map(channel => channel.name)).toEqual(['Alpha']);
+    expect(PlaylistService.pinnedRevision).toBeGreaterThan(before);
+  });
+
+  it('leaves no mapping when the pinned list fails to fetch', async () => {
+    await loadMain();
+    storageMock.pinnedSelections = [
+      { url: LINK_URL, group: 'Sports', name: 'Sports', pinnedAt: 1 },
+    ];
+    fetchTextMock.mockImplementationOnce(() => Promise.reject(new Error('offline')));
+
+    await PlaylistService.loadPinnedSelections();
+
+    expect(PlaylistService.pinnedLiveGroups()).toEqual([]);
+    expect(PlaylistService.channels.map(channel => channel.name)).toEqual(['Alpha']);
+  });
+
+  it('rebuilds the mapping after the list is renamed', async () => {
+    await loadMain();
+    await pin('Sports', 'Sports');
+    storageMock.pinnedSelections = [
+      { url: LINK_URL, group: 'Sports', name: 'Sports HD', pinnedAt: 1 },
+    ];
+
+    await PlaylistService.loadPinnedSelections();
+
+    expect(PlaylistService.pinnedLiveGroups()).toEqual([
+      { group: 'Sports HD', url: LINK_URL, groupKey: 'Sports', name: 'Sports HD' },
+    ]);
+  });
+
+  it('bumps the pinned revision on every overlay change', async () => {
+    await loadMain();
+    const initial = PlaylistService.pinnedRevision;
+
+    await pin('Sports', 'Sports');
+    const pinnedOnce = PlaylistService.pinnedRevision;
+    expect(pinnedOnce).toBeGreaterThan(initial);
+
+    await pin('Movies', 'Movies');
+    const pinnedTwice = PlaylistService.pinnedRevision;
+    expect(pinnedTwice).toBeGreaterThan(pinnedOnce);
+
+    await PlaylistService.unpinLiveGroup('Sports');
+    expect(PlaylistService.pinnedRevision).toBeGreaterThan(pinnedTwice);
   });
 });

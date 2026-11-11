@@ -10,6 +10,8 @@ export class FetchTextError extends Error {
     public readonly code: FetchTextErrorCode,
     message: string,
     public readonly status = 0,
+    /** The response body had no bytes at all. */
+    public readonly emptyBody = false,
   ) {
     super(message);
     this.name = 'FetchTextError';
@@ -114,11 +116,13 @@ export async function fetchLimitedText(
     : requiredPrefix === undefined || typeof requiredPrefix === 'function'
       ? []
       : requiredPrefix;
-  const prefixError = () => new FetchTextError(
+  const prefixError = (emptyBody = false) => new FetchTextError(
     'invalid_content',
     validator
       ? 'Response has an invalid opening'
       : `Response does not begin with ${prefixes.join(' or ')}`,
+    0,
+    emptyBody,
   );
   const hasPrefixCheck = !!validator || prefixes.length > 0;
   const prefixProbeLength = validator
@@ -177,7 +181,7 @@ export async function fetchLimitedText(
       }
     }
     if (!prefixSettled
-        && checkPrefix(new Uint8Array(head), true) !== 'match') throw prefixError();
+        && checkPrefix(new Uint8Array(head), true) !== 'match') throw prefixError(length === 0);
 
     const bytes = new Uint8Array(length);
     let offset = 0;

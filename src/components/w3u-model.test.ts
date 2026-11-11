@@ -2,6 +2,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 import { CONFIG } from '../config';
 import type { Channel, ParsedPlaylist, W3uGroupLink } from '../types';
 import { UNCATEGORIZED_GROUP } from '../types';
+import type { PinnedLinkReason } from '../services/playlist-service';
 import {
   buildLinkedList,
   canonicalUrl,
@@ -15,6 +16,10 @@ import {
   linkRows,
   LinkFailureError,
   parseStationInfo,
+  pinFailureCopy,
+  pinKeyOf,
+  pinNoticeCopy,
+  pinRequestFor,
   W3U_LINK_LIMITS,
   W3uLinkLoader,
 } from './w3u-model';
@@ -463,5 +468,57 @@ describe('W3uLinkLoader', () => {
     expect(loader.get('http://host/one')).toBeUndefined();
     const linksOnly = new W3uLinkLoader(fetcher(playlist([], [linkTo('Hub', 'http://host/two')])));
     expect((await linksOnly.load('http://host/one'))?.links).toHaveLength(1);
+  });
+});
+
+describe('showing a group in Live', () => {
+  const rows = (links: W3uGroupLink[], path: string[] = [], atLimit = false) => linkRows(links, new Set(path), atLimit);
+  const hub: W3uGroupLink = { name: 'Hub', image: '', url: 'http://host/hub.m3u' };
+
+  it('adds a linked list whole, one level below the list it sits in', () => {
+    const [row] = rows([hub]);
+    expect(pinRequestFor(row, 'Hub', null, 0)).toEqual({ url: 'http://host/hub.m3u', group: '', name: 'Hub', depth: 1 });
+    expect(pinRequestFor(row, 'Hub', 'http://host/a.m3u', 2)).toEqual({
+      url: 'http://host/hub.m3u', group: '', name: 'Hub', depth: 3,
+    });
+  });
+
+  it('adds a station group of an opened list by that list\u2019s address', () => {
+    const { groups } = buildW3uLibrary([w3u('Alpha', { 'w3u-online': 'true' }, { group: 'MLB \u26BE' })]);
+    expect(pinRequestFor(groups[0], 'MLB', 'http://host/a.m3u', 1)).toEqual({
+      url: 'http://host/a.m3u', group: 'MLB \u26BE', name: 'MLB', depth: 1,
+    });
+  });
+
+  it('offers nothing for the root\u2019s own groups or a closed link', () => {
+    const { groups } = buildW3uLibrary([w3u('Alpha', { 'w3u-online': 'true' })]);
+    expect(pinRequestFor(groups[0], 'Group A', null, 0)).toBeNull();
+    expect(pinRequestFor(rows([hub], ['http://host/hub.m3u'])[0], 'Hub', null, 0)).toBeNull();
+    expect(pinRequestFor(rows([hub], [], true)[0], 'Hub', 'http://host/a.m3u', 3)).toBeNull();
+  });
+
+  it('keys a pin by canonical address and group', () => {
+    expect(pinKeyOf({ url: 'HTTP://Host/a.m3u#top', group: 'G' })).toBe(pinKeyOf({ url: 'http://host/a.m3u', group: 'G' }));
+    expect(pinKeyOf({ url: 'http://host/a.m3u', group: '' })).not.toBe(pinKeyOf({ url: 'http://host/a.m3u', group: 'G' }));
+  });
+
+  it('words every refusal for a viewer, never as a code', () => {
+    const reasons: PinnedLinkReason[] = [
+      'invalid', 'depth', 'budget', 'limit', 'fetch_failed', 'group_missing', 'canceled', 'storage',
+    ];
+    const copy = reasons.map((reason) => pinFailureCopy(reason));
+    expect(new Set(copy).size).toBe(reasons.length);
+    copy.forEach((text) => {
+      expect(text.length).toBeGreaterThan(10);
+      expect(text).not.toMatch(/[a-z]+_[a-z]+/);
+    });
+  });
+
+  it('names the group in a notice, and falls back to the refusal wording', () => {
+    const base = { url: 'http://host/a.m3u', group: 'MLB \u26BE', name: 'MLB \u26BE' };
+    expect(pinNoticeCopy({ ...base, reason: 'group_missing' })).toBe('MLB is no longer in its playlist and was removed from Live.');
+    expect(pinNoticeCopy({ ...base, reason: 'fetch_failed' })).toBe("Couldn't load MLB for Live.");
+    expect(pinNoticeCopy({ ...base, reason: 'budget' })).toBe("MLB didn't fit in Live and was skipped.");
+    expect(pinNoticeCopy({ ...base, reason: 'limit' })).toBe(pinFailureCopy('limit'));
   });
 });

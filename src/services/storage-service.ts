@@ -1,11 +1,12 @@
 import { CONFIG } from '../config';
 import { DEFAULT_THEME, DEFAULT_OVERLAY, DEFAULT_TEXT_SIZE, isValidTextSize, type OverlayStyle, type TextSize } from '../config/themes';
-import type { AudioPref, CatchupProgressEntry, Channel, ChannelCustomization, ChannelCycleMode, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
+import type { AudioPref, CatchupProgressEntry, Channel, ChannelCustomization, ChannelCycleMode, HeaderPlayback, LastChannel, ManualEpgSource, ParentalControlConfig, ParentalPinThrottle, PinnedSelection, PlaylistEntry, RecentlyWatchedLiveEntry, Reminder, ResumeEntry, ResumeKind, SubtitlePref, TzMode, WatchlistEntry, WatchlistKind, XtreamLiveCategorySnapshot } from '../types';
 import type { OnlineSubtitleConfig, PickedOnlineSub } from './subtitle-search/types';
 import { channelKey, legacyChannelKey } from '../utils/channel';
 import { genPlaylistId } from '../utils/playlist';
 import { isCatalogSort, isCatalogSortDirection, type CatalogSortPreference } from '../utils/catalog-sort';
 import { normalizeXtreamBaseUrl } from '../utils/xtream-url';
+import { canonicalUrl } from '../utils/url';
 import { createLogger } from '../utils/logger';
 import { isLocalePreference, type LocalePreference } from '../i18n';
 import {
@@ -61,6 +62,10 @@ interface UserDataState {
 }
 
 const LIVE_CATEGORY_KEY_PREFIX = 'live-categories:';
+// Pinned linked-list groups shown in Live. Small and read at boot, so it lives
+// in localStorage rather than the IndexedDB user-data stores.
+const PINNED_SELECTIONS_KEY = 'pinned_linked_groups';
+export const PINNED_SELECTIONS_MAX = 50;
 // Without IndexedDB the snapshot is session-only; losing it is harmless.
 const fallbackLiveCategorySnapshots: Record<string, XtreamLiveCategorySnapshot> = {};
 
@@ -80,6 +85,28 @@ let onPlaylistsReplaced: ((previous: PlaylistEntry[], next: PlaylistEntry[]) => 
 
 function cloneValue<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function sanitizePinnedSelections(value: unknown): PinnedSelection[] {
+  if (!Array.isArray(value)) return [];
+  const byKey = new Map<string, PinnedSelection>();
+  for (const item of value) {
+    if (!item || typeof item !== 'object') continue;
+    const candidate = item as Record<string, unknown>;
+    if (typeof candidate.url !== 'string' || !/^https?:\/\//i.test(candidate.url.trim())) continue;
+    const url = canonicalUrl(candidate.url);
+    const group = typeof candidate.group === 'string' ? candidate.group : '';
+    const rawName = typeof candidate.name === 'string' ? candidate.name.trim() : '';
+    const name = rawName || group;
+    if (!url || (!name && !group)) continue;
+    const pinnedAt = typeof candidate.pinnedAt === 'number' && Number.isFinite(candidate.pinnedAt)
+      ? candidate.pinnedAt
+      : 0;
+    byKey.set(`${url}|${group}`, { url, group, name, pinnedAt });
+  }
+  return Array.from(byKey.values())
+    .sort((a, b) => a.pinnedAt - b.pinnedAt)
+    .slice(-PINNED_SELECTIONS_MAX);
 }
 
 function sanitizeManualEpgSources(value: unknown[]): ManualEpgSource[] {
@@ -717,6 +744,15 @@ export const StorageService = {
     return stored;
   },
 
+  // Linked-list groups the user pinned into Live. Newest 50 survive; a bad
+  // value reads as none rather than risking a boot failure.
+  getPinnedSelections(): PinnedSelection[] {
+    return sanitizePinnedSelections(get<unknown>(PINNED_SELECTIONS_KEY, []));
+  },
+  setPinnedSelections(selections: PinnedSelection[]): boolean {
+    return set(PINNED_SELECTIONS_KEY, sanitizePinnedSelections(selections));
+  },
+
   getLiveCategorySnapshot(playlistId: string): XtreamLiveCategorySnapshot | null {
     const all = userData ? userData.liveCategorySnapshots : fallbackLiveCategorySnapshots;
     return all[playlistId] ? cloneValue(all[playlistId]) : null;
@@ -1087,6 +1123,14 @@ export const StorageService = {
   },
   setAutoPlay(val: boolean): void {
     set('auto_play', val);
+  },
+
+  // Only an explicit false hides the Guide tab; a malformed value keeps it.
+  getShowGuideTab(): boolean {
+    return get<unknown>('show_guide_tab', true) !== false;
+  },
+  setShowGuideTab(val: boolean): void {
+    set('show_guide_tab', val);
   },
 
   getLivePreview(): boolean {

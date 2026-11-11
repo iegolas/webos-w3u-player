@@ -736,6 +736,7 @@ export class Settings {
     const livePreview = StorageService.getLivePreview();
     const channelCycleMode = StorageService.getChannelCycleMode();
     const showHidden = StorageService.getShowHiddenChannels();
+    const showGuideTab = StorageService.getShowGuideTab();
     const feedTime = StorageService.getTzMode() === 'feed';
     const tzOffset = StorageService.getEpgTzOffset();
     const os = StorageService.getOnlineSubtitleConfig();
@@ -968,6 +969,11 @@ export class Settings {
                 <div class="settings-item">
                   <div class="settings-item-title">${t('settings.textSize')}</div>
                   ${dropdown('text-size', textSizes, textSize)}
+                </div>
+                <div class="settings-item">
+                  <div class="settings-item-title">${t('settings.showGuideTab')}</div>
+                  ${toggleGroup('show-guide-tab', [{ value: 'on', label: t('settings.on') }, { value: 'off', label: t('settings.off') }], showGuideTab ? 'on' : 'off')}
+                  <div class="settings-item-hint">${t('settings.showGuideTabHint')}</div>
                 </div>
               </div>
             </div>
@@ -2927,6 +2933,9 @@ export class Settings {
 
     const textSize = ($('#text-size', this.container) as HTMLElement | null)?.dataset.value;
     if (textSize) StorageService.setTextSize(textSize as TextSize);
+
+    const showGuideBtn = $('#show-guide-tab .toggle-option.active', this.container);
+    if (showGuideBtn) StorageService.setShowGuideTab(showGuideBtn.dataset.value === 'on');
 
     const locale = ($('#app-language', this.container) as HTMLElement | null)?.dataset.value as LocalePreference | undefined;
     if (locale) StorageService.setLocalePreference(locale);

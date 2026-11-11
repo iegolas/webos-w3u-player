@@ -116,6 +116,25 @@ export interface W3uGroupLink {
   parentGroup?: string;
 }
 
+/** A linked list group the user pinned into the live channel list. `group` is
+ * empty for a whole-list pin. */
+export interface PinnedSelection {
+  url: string;
+  group: string;
+  name: string;
+  pinnedAt: number;
+}
+
+/** A pinned selection as it appears in the Live tab. `group` is the displayed
+ *  group name, suffixed when it collided; `groupKey` stays the selection's
+ *  group (`''` for a whole-list pin). */
+export interface PinnedLiveGroup {
+  group: string;
+  url: string;
+  groupKey: string;
+  name: string;
+}
+
 /** A linked sub-list exposed by the playlist service. */
 export interface PlaylistGroupLink extends W3uGroupLink {
   /** Every enabled playlist that declared this link; the first one owns it. */

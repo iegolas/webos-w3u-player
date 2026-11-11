@@ -26,6 +26,9 @@ const { data, customization, playlistMock, epgMock, storageMock, recentMock, toa
     playlistMock: {
       channels,
       groupsRevision: 0,
+      pinnedRevision: 0,
+      pinnedLiveGroups: () => [] as { group: string; url: string; groupKey: string; name: string }[],
+      unpinLiveGroup: vi.fn(async () => false),
       playlistTabs: [] as { id: string; name: string }[],
       getGroupsForPlaylist: () => ['News', 'Sports'],
       getGroupKeyForDisplay: (display: string) => display,
@@ -591,7 +594,8 @@ describe('ChannelList edit mode', () => {
     Focus.pointer(100, 10);
 
     expect(container.querySelector('.grabbed')).toBeNull();
-    expect(names()).toEqual(['Alpha', 'Bravo', 'Charlie']);
+    // Back left edit mode, so the All-list group prefix is back.
+    expect(names()).toEqual(['News - Alpha', 'Bravo', 'News - Charlie']);
     expect(storageMock.setChannelCustomization).not.toHaveBeenCalled();
     document.dispatchEvent(new MouseEvent('mouseup', {
       button: 0, clientX: 100, clientY: 10, bubbles: true,
@@ -672,7 +676,8 @@ describe('ChannelList edit mode', () => {
     expect(ChannelCustomizationService.isHidden(channelKey(data.raw[1]))).toBe(true);
 
     list.handleAction('yellow');
-    expect(names()).toEqual(['Alpha', 'Charlie']);
+    // Leaving edit mode restores the All-list group prefix.
+    expect(names()).toEqual(['News - Alpha', 'News - Charlie']);
   });
 
   it('shows a toast instead of hiding the hovered channel when none is selected', () => {

@@ -91,6 +91,7 @@ export class App {
   private reminderPrompt = new ReminderPrompt();
   private reminderManager!: ReminderManager;
   private reminderManagerOrigin: 'settings' | 'epg' = 'settings';
+  private guideApplied = StorageService.getShowGuideTab();
   private tabBar!: TabBar;
   private search!: Search;
   private historyDropdown!: SearchHistoryDropdown;
@@ -309,6 +310,13 @@ export class App {
       onPlay: (channel) => this.playW3uChannel(channel),
       onCancelPlay: () => this.w3uResolve?.abort(),
       onOpenInBrowser: (station) => this.openStationInBrowser(station.channel.url),
+      pins: {
+        isPinned: (url, group) => PlaylistService.isGroupPinned(url, group),
+        setPinned: (request, pinned) => PlaylistService.setGroupPinned(request, pinned),
+        revision: () => PlaylistService.pinnedRevision,
+        takeNotices: () => PlaylistService.takePinnedLinkNotices(),
+      },
+      onNotice: (message) => showToast(message),
     });
     this.search = new Search(this.views.search, {
       onRevealTabBar: () => this.leaveUp(),
@@ -387,6 +395,7 @@ export class App {
       onLockNow: () => ParentalControlService.lock('lock-now'),
     });
     this.tabBar.init();
+    this.tabBar.setSections(true, false, this.guideEnabled);
 
     KeyHandler.init();
     KeyHandler.setHandler((action, event) => {
@@ -736,7 +745,13 @@ export class App {
     setDisplayTz(StorageService.getTzMode(), offset);
   }
 
+  private get guideEnabled(): boolean {
+    return StorageService.getShowGuideTab();
+  }
+
+  // With the Guide off nobody can see the guide, so no source is downloaded.
   private epgSources(): EpgSource[] {
+    if (!this.guideEnabled) return [];
     if (!StorageService.getPlaylists().some(isSourceEnabled)) return [];
     const manual = StorageService.getManualEpgSources()
       .map(source => ({ ...source, kind: 'manual' as const }));
@@ -889,7 +904,11 @@ export class App {
       const xtreamAccounts = playlists
         .filter((playlist) =>
           playlist.source === 'xtream' && playlist.xtream && isSourceEnabled(playlist));
-      this.tabBar.setSections(xtreamAccounts.length > 0, hasW3uLibrary(PlaylistService.channels, PlaylistService.getGroupLinks()));
+      this.tabBar.setSections(
+        xtreamAccounts.length > 0,
+        hasW3uLibrary(PlaylistService.channels, PlaylistService.getGroupLinks()),
+        this.guideEnabled,
+      );
       this.tabBar.setAccounts(xtreamAccounts, this.activeXtreamAccount()?.id ?? '');
       this.channelList.render();
       this.sidebar.refresh();
@@ -908,6 +927,7 @@ export class App {
     this.stopPlaylistRefresh();
     if (this.playlistRefreshPromise) await this.playlistRefreshPromise;
 
+    this.guideApplied = this.guideEnabled;
     this.applyDisplayTz();
     this.epgGrid.resetDay(); // re-pick today; a tz change invalidates the remembered day index
 
@@ -922,7 +942,7 @@ export class App {
         EpgService.reset();
         // No account at all: drop Movies/Series (Xtream-only) and any stale
         // account avatars so the docked tab bar shows Live/Settings/Search only.
-        this.tabBar.setSections(false);
+        this.tabBar.setSections(false, false, this.guideEnabled);
         this.tabBar.setAccounts([], '');
         this.channelList.render();
         this.showView('settings');
@@ -944,6 +964,7 @@ export class App {
           kept: progress.channelsKept,
         });
       });
+      await PlaylistService.loadPinnedSelections();
       this.player.syncCurrentIndex();
       await ChannelHealthService.initialize();
       log.info('Channels loaded:', PlaylistService.channels.length,
@@ -952,7 +973,7 @@ export class App {
       const epgSources = this.epgSources();
       if (epgSources.length) log.info('Using EPG sources:', epgSources);
       else {
-        log.warn('No EPG sources configured');
+        if (this.guideEnabled) log.warn('No EPG sources configured');
         EpgService.reset();
       }
       const epgChannels = PlaylistService.getEpgEligibleChannels();
@@ -962,7 +983,11 @@ export class App {
 
       const hasXtream = StorageService.getPlaylists()
         .some((p) => p.source === 'xtream' && isSourceEnabled(p));
-      this.tabBar.setSections(hasXtream, hasW3uLibrary(PlaylistService.channels, PlaylistService.getGroupLinks()));
+      this.tabBar.setSections(
+        hasXtream,
+        hasW3uLibrary(PlaylistService.channels, PlaylistService.getGroupLinks()),
+        this.guideEnabled,
+      );
       const xtreamAccounts = StorageService.getPlaylists()
         .filter((p) => p.source === 'xtream' && p.xtream && isSourceEnabled(p));
       this.tabBar.setAccounts(xtreamAccounts, this.activeXtreamAccount()?.id ?? '');
@@ -1051,6 +1076,7 @@ export class App {
   }
 
   private showView(name: ViewName, preserveChannelFocus = false, resumeChannelFocus = false): void {
+    if (name === 'epg' && !this.guideEnabled) name = 'channels';
     // Every way out of the manager (Back, color keys, tab bar, a reminder)
     // ends management so concealment returns; the manager never stays stacked.
     if (name !== 'parental-controls' && this.isCurrentView('parental-controls')) {
@@ -1130,7 +1156,11 @@ export class App {
       return;
     }
     this.player.stop();
-    if (section === 'epg') { this.openEpg(); return; }
+    if (section === 'epg') {
+      if (this.guideEnabled) this.openEpg();
+      else this.goLive();
+      return;
+    }
     if (section === 'movies') {
       this.showView('movies');
       const account = this.activeXtreamAccount();
@@ -1271,6 +1301,10 @@ export class App {
   // Show the guide and refresh its data in the background (shared by the EPG
   // tab and the red-key shortcut).
   private openEpg(): void {
+    if (!this.guideEnabled) {
+      this.goLive();
+      return;
+    }
     this.epgGrid.focusChannel(this.player.getCurrentIndex());
     this.showView('epg');
     this.epgGrid.render(true);
@@ -1281,6 +1315,43 @@ export class App {
     EpgService.refresh(renderEpg).then(() => {
       renderEpg();
     });
+  }
+
+  // Settings saved without a reload: the tab follows the toggle at once. Turning
+  // the Guide off drops the in-memory guide; turning it on loads it again.
+  private applyGuideSetting(): void {
+    const enabled = this.guideEnabled;
+    const had = this.guideApplied;
+    this.guideApplied = enabled;
+    this.tabBar.setSections(
+      this.hasXtreamSource(),
+      hasW3uLibrary(PlaylistService.channels, PlaylistService.getGroupLinks()),
+      enabled,
+    );
+    if (enabled === had) return;
+    if (!enabled) {
+      this.stopEpgRefresh();
+      EpgService.reset();
+      this.refreshEpgDependentViews();
+      return;
+    }
+    const sources = this.epgSources();
+    if (!sources.length) return;
+    void EpgService.load(
+      sources,
+      PlaylistService.getEpgEligibleChannels(),
+      () => this.refreshEpgDependentViews(),
+    )
+      .then(() => EpgService.refresh(() => this.refreshEpgDependentViews()))
+      .then(() => {
+        this.refreshEpgDependentViews();
+        this.scheduleEpgRefresh(true);
+      })
+      .catch(err => log.error('EPG load after enabling the Guide failed:', err));
+  }
+
+  private hasXtreamSource(): boolean {
+    return StorageService.getPlaylists().some((p) => p.source === 'xtream' && isSourceEnabled(p));
   }
 
   private refreshEpgDependentViews(): void {
@@ -1702,7 +1773,7 @@ export class App {
     // Global shortcuts
     // While the channel list is in edit mode the color keys belong to the editor.
     const editingChannels = currentView === 'channels' && this.channelList.isEditing;
-    if (action === 'red' && currentView !== 'epg' && !editingChannels) {
+    if (action === 'red' && this.guideEnabled && currentView !== 'epg' && !editingChannels) {
       this.sidebar.hide();
       this.menu.hide();
       this.player.stop();
@@ -1995,6 +2066,7 @@ export class App {
       this.search.invalidateCatalog();
       this.applyDisplayTz();
       this.epgGrid.resetDay();
+      this.applyGuideSetting();
       this.scheduleEpgRefresh();
       this.schedulePlaylistRefresh();
     }

@@ -152,6 +152,36 @@ describe('TabBar', () => {
     expect(document.querySelector('.tab-bar')?.classList.contains('tab-bar--hidden')).toBe(true);
   });
 
+  it('omits the Guide tab when it is turned off', () => {
+    bar.setSections(true, false, false);
+    expect(items()).toEqual(['Live', 'Movies', 'Series', 'Settings', 'Search']);
+    expect(document.querySelector('[data-section="epg"]')).toBeNull();
+  });
+
+  it('falls back to Live when the active Guide tab goes away, and restores it without a reload', () => {
+    bar.setActive('epg');
+    bar.setSections(true, false, false);
+    expect(bar.activeSection).toBe('live');
+    expect(items()).not.toContain('Guide');
+    bar.setSections(true, false, true);
+    expect(items()).toEqual(['Live', 'Guide', 'Movies', 'Series', 'Settings', 'Search']);
+  });
+
+  it('walks Live to Movies to Settings with the Guide tab absent', () => {
+    bar.setSections(true, false, false);
+    bar.focus();
+    press('right');
+    expect(onSwitch).toHaveBeenLastCalledWith('movies');
+    press('right');
+    press('right');
+    expect(onSwitch).toHaveBeenLastCalledWith('settings');
+    press('left');
+    press('left');
+    press('left');
+    expect(onSwitch).toHaveBeenLastCalledWith('live');
+    expect(onSwitch).not.toHaveBeenCalledWith('epg');
+  });
+
   it('clamps the active section to Live when switching to a set that lacks it', () => {
     bar.setActive('movies');
     bar.setSections(false); // M3U has no Movies
@@ -575,6 +605,18 @@ describe('TabBar account switcher', () => {
     press('right'); // -> account
     press('right'); // wrap -> live
     expect(onSwitch).toHaveBeenLastCalledWith('live');
+  });
+
+  it('reaches the avatar after Search and wraps to Live with the Guide tab absent', () => {
+    bar.setSections(true, false, false);
+    bar.setAccounts(A, 'a1');
+    bar.setActive('search');
+    bar.focus();
+    press('right'); // Search -> account
+    expect(avatar()?.classList.contains('focused')).toBe(true);
+    press('right'); // wrap -> Live
+    expect(onSwitch).toHaveBeenLastCalledWith('live');
+    expect(onSwitch).not.toHaveBeenCalledWith('epg');
   });
 
   it('Select on the avatar opens the menu; Select on a row fires onSelectAccount', () => {

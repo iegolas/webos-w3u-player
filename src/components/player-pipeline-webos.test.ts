@@ -73,6 +73,7 @@ function callbacks(): PlayerPipelineOptions {
     isCatchup: () => false,
     headerPlayback: () => 'luna',
     onError: vi.fn(),
+    onStreamOffline: vi.fn(),
     onAudioTracksUpdated: vi.fn(),
     onSubtitleTracksUpdated: vi.fn(),
     onPlaybackPathChange: vi.fn(),

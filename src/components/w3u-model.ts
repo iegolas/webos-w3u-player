@@ -5,6 +5,11 @@ import { truncate } from '../utils/text';
 import { classifyStreamUrl } from '../utils/stream-url-classifier';
 import { isResolvableEmbedHost } from '../services/embed-resolver';
 import { fetchAndParseM3U } from '../parsers/m3u-loader';
+import { canonicalUrl } from '../utils/url';
+import { t, type TextMessageKey } from '../i18n';
+import type { GroupPinRequest, PinnedLinkNotice, PinnedLinkReason } from '../services/playlist-service';
+
+export { canonicalUrl };
 
 // Display-only data for the W3U Library. Everything here derives from the
 // parsed channels; nothing is written back, so stored names stay as delivered.
@@ -237,25 +242,6 @@ function isFetchableUrl(url: string): boolean {
   return /^https?:\/\//i.test(url);
 }
 
-// The form two addresses are compared in, and the cache key: scheme and host
-// in lower case, no fragment. The path and query stay as written, because a
-// query can carry the credentials that tell two lists apart. Never shown.
-export function canonicalUrl(url: string): string {
-  const trimmed = url.trim();
-  try {
-    const parsed = new URL(trimmed);
-    parsed.hash = '';
-    return parsed.href;
-  } catch {
-    return trimmed
-      .replace(/#.*$/, '')
-      .replace(/^([a-z][a-z0-9+.-]*:\/\/)([^/?#]*)/i, (_all, scheme: string, authority: string) => {
-        const at = authority.lastIndexOf('@');
-        return scheme.toLowerCase() + authority.slice(0, at + 1) + authority.slice(at + 1).toLowerCase();
-      });
-  }
-}
-
 // A link name is shown as written, except one that is itself an address: that
 // can carry a username and password, so only its host is shown.
 function linkLabel(name: string, url: string): string {
@@ -415,5 +401,61 @@ export class W3uLinkLoader {
       this.cache.delete(oldest);
     }
     return list;
+  }
+}
+
+// --- showing a group in Live ---
+
+// What a Library row can add to Live, or null when it cannot. A linked
+// playlist row adds the whole list (`group: ''`), one level below the list it
+// sits in. A station group inside an opened list adds that group of the list.
+// The root level's own groups already play in Live, and a closed link
+// ('limit', 'open') is never fetched, so neither is offered.
+// `listUrl` and `listDepth` describe the list the row sits in: the Library
+// root is depth 0 with no address.
+export function pinRequestFor(
+  group: W3uGroup,
+  label: string,
+  listUrl: string | null,
+  listDepth: number,
+): GroupPinRequest | null {
+  if (group.link) {
+    if (group.link.blocked) return null;
+    return { url: group.link.url, group: '', name: label, depth: listDepth + 1 };
+  }
+  if (!listUrl || listDepth < 1) return null;
+  return { url: listUrl, group: group.id, name: label, depth: listDepth };
+}
+
+// One key per list and group, the same address spelling the service uses.
+export function pinKeyOf(request: Pick<GroupPinRequest, 'url' | 'group'>): string {
+  return `${canonicalUrl(request.url)}|${request.group}`;
+}
+
+const PIN_FAILURE_KEYS: Record<PinnedLinkReason, TextMessageKey> = {
+  invalid: 'w3u.pinFailedInvalid',
+  depth: 'w3u.pinFailedDepth',
+  budget: 'w3u.pinFailedBudget',
+  limit: 'w3u.pinFailedLimit',
+  fetch_failed: 'w3u.pinFailedFetch',
+  group_missing: 'w3u.pinFailedMissing',
+  canceled: 'w3u.pinFailedCanceled',
+  storage: 'w3u.pinFailedStorage',
+};
+
+// Why a pin was refused, in words a viewer can act on; never the code.
+export function pinFailureCopy(reason: PinnedLinkReason): string {
+  return t(PIN_FAILURE_KEYS[reason] ?? PIN_FAILURE_KEYS.invalid);
+}
+
+// A pinned group that vanished or could not load, named so the viewer knows
+// which one. Reasons without their own wording fall back to the refusal copy.
+export function pinNoticeCopy(notice: PinnedLinkNotice): string {
+  const name = cleanDisplayText(notice.name) || notice.name;
+  switch (notice.reason) {
+    case 'group_missing': return t('w3u.pinNoticeMissing', { name });
+    case 'fetch_failed': return t('w3u.pinNoticeFetch', { name });
+    case 'budget': return t('w3u.pinNoticeBudget', { name });
+    default: return pinFailureCopy(notice.reason);
   }
 }
