@@ -1,5 +1,10 @@
 # W3U Player for webOS — plan & status
 
+> This file records the original design and the measured findings from the
+> porting work. The maintained reference — format, data model, seams,
+> verification and how to rebase onto a newer upstream — now lives in
+> [`docs/w3u/`](docs/w3u/README.md).
+
 ## Goal
 
 An LG webOS TV app that loads **W3U playlists** (Wiseplay's JSON playlist
